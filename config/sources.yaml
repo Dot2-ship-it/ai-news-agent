@@ -1,0 +1,46 @@
+sources:
+  - id: deepmind
+    name: Google DeepMind Blog
+    url: https://deepmind.google/blog/
+    language: en
+    strategy: translate_and_summarize
+    allowed_domains: [deepmind.google]
+    include_patterns: [/blog/]
+    exclude_patterns: ["?category=", "?page="]
+    max_links: 25
+
+  - id: 36kr_ai
+    name: 36氪 AI 相关专题
+    url: https://www.36kr.com/motif/327686782977
+    language: zh
+    strategy: summarize
+    allowed_domains: [www.36kr.com, 36kr.com]
+    include_patterns: [/p/]
+    max_links: 25
+
+  - id: qbitai
+    name: 量子位 QbitAI
+    url: https://www.qbitai.com/
+    language: zh
+    strategy: summarize
+    allowed_domains: [www.qbitai.com, qbitai.com]
+    include_patterns: [/]
+    max_links: 25
+
+  - id: jiqizhixin
+    name: 机器之心
+    url: https://www.jiqizhixin.com/
+    language: zh
+    strategy: summarize
+    allowed_domains: [www.jiqizhixin.com, jiqizhixin.com]
+    include_patterns: [/articles/]
+    max_links: 30
+
+  - id: latepost
+    name: 晚点 LatePost
+    url: https://www.latepost.com/
+    language: zh
+    strategy: summarize
+    allowed_domains: [www.latepost.com, latepost.com]
+    include_patterns: [/news/, /article/, /posts/]
+    max_links: 25
