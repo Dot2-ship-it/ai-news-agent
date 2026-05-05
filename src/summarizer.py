@@ -304,7 +304,7 @@ JSON schema：
 {json.dumps(stats, ensure_ascii=False)}
 
 日报 JSON：
-{digest.model_dump_json(ensure_ascii=False)}
+{json.dumps(digest.model_dump(mode="json"), ensure_ascii=False, indent=2)}
 """
         response = self.client.chat.completions.create(
             model=self.model,
