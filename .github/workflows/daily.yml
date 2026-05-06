@@ -1,8 +1,6 @@
 name: Daily AI News Agent
 
 on:
-  schedule:
-    - cron: "50 03 * * *"
   workflow_dispatch:
 
 jobs:
