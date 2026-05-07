@@ -3,7 +3,8 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -24,8 +25,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--lookback-hours",
         type=int,
-        default=int(os.getenv("LOOKBACK_HOURS", "48")),
-        help="Fetch articles published within the last N hours. Default: 48. Example for testing: 720.",
+        default=int(os.getenv("LOOKBACK_HOURS", "24")),
+        help="Fetch articles published within the last N hours. Default: 24. Example for testing: 720.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print email content without sending")
     parser.add_argument("--no-cache", action="store_true", help="Do not use or update seen article cache")
@@ -38,6 +39,12 @@ def main() -> None:
     load_dotenv()
     setup_logging()
     args = parse_args()
+    tz = ZoneInfo("Asia/Shanghai")
+    now = datetime.now(tz)
+    today = now.strftime("%Y-%m-%d")
+    start_time = now - timedelta(hours=args.lookback_hours)
+    end_time = now
+    window_text = f"{start_time.strftime('%Y-%m-%d %H:%M')} 至 {end_time.strftime('%Y-%m-%d %H:%M')}"
 
     config = load_config(args.config)
     crawler = NewsCrawler()
@@ -47,7 +54,7 @@ def main() -> None:
 
     try:
         for source in config.sources:
-            articles, result = crawler.crawl_source(source, args.lookback_hours)
+            articles, result = crawler.crawl_source(source, start_time, end_time)
             stat = {
                 "source": result.source_name,
                 "candidates": result.candidates,
@@ -92,11 +99,12 @@ def main() -> None:
         "total_fetched": sum(int(stat["fetched"]) for stat in source_stats),
         "total_kept": sum(int(stat["kept"]) for stat in source_stats),
         "final_selected": 0,
+        "window_text": window_text,
+        "lookback_hours": args.lookback_hours,
         "source_stats": source_stats,
     }
 
     prepared_articles: list[Article] = []
-    digest_date = datetime.now().date()
     if all_articles:
         model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
         translator = OpenAITranslator(model=model) if any(
@@ -112,13 +120,13 @@ def main() -> None:
             prepared_articles.append(article)
         digest = NewsSummarizer(model=model).build_digest(
             prepared_articles,
-            digest_date,
+            today,
             stats=run_stats,
             max_items=args.max_items,
             max_per_source=args.max_per_source,
         )
     else:
-        digest = NewsSummarizer.build_empty_digest(digest_date, run_stats)
+        digest = NewsSummarizer.build_empty_digest(today, run_stats)
     body = render_email_text(digest)
 
     if args.dry_run:

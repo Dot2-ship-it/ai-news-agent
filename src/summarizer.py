@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import date
 
 from openai import OpenAI
 
@@ -42,13 +41,15 @@ class NewsSummarizer:
         self.model = model
 
     @staticmethod
-    def build_empty_digest(digest_date: date, stats: dict[str, object] | None = None) -> DailyDigest:
+    def build_empty_digest(digest_date: str, stats: dict[str, object] | None = None) -> DailyDigest:
         stats = stats or {}
         total_candidates = int(stats.get("total_candidates", 0))
         total_kept = int(stats.get("total_kept", 0))
+        window_text = str(stats.get("window_text", "北京时间过去 24 小时"))
         return DailyDigest(
-            subject=f"AI 前沿日报｜{digest_date.isoformat()}",
+            subject=f"AI 前沿日报｜{digest_date}",
             opening_summary=(
+                f"- 本期抓取范围：北京时间 {window_text}。\n"
                 f"- 今日共抓取候选链接 {total_candidates} 条，"
                 f"成功提取正文 {total_kept} 篇，最终精选 0 条进入日报。\n"
                 "- 今日要点一：指定来源暂未形成可用于日报的新增内容。\n"
@@ -62,7 +63,7 @@ class NewsSummarizer:
     def build_digest(
         self,
         articles: list[Article],
-        digest_date: date,
+        digest_date: str,
         stats: dict[str, object] | None = None,
         max_items: int = 5,
         max_per_source: int = 2,
@@ -106,11 +107,12 @@ class NewsSummarizer:
 - importance 只能是“高”“中”“低”。
 
 开头摘要写法：
-- opening_summary 必须写成 4 条短 bullet，每条以“- ”开头。
-- 第 1 条必须严格包含：今日共抓取候选链接 X 条，成功提取正文 Y 篇，最终精选 Z 条进入日报。
-- 第 2 条必须以“今日要点一：”开头，归纳入选文章背后的共同趋势。
-- 第 3 条必须以“今日要点二：”开头，归纳另一个行业方向或结构性变化。
-- 第 4 条必须以“今日值得继续关注：”开头。
+- opening_summary 必须写成 5 条短 bullet，每条以“- ”开头。
+- 第 1 条必须严格包含：本期抓取范围：北京时间 YYYY-MM-DD HH:mm 至 YYYY-MM-DD HH:mm。
+- 第 2 条必须严格包含：今日共抓取候选链接 X 条，成功提取正文 Y 篇，最终精选 Z 条进入日报。
+- 第 3 条必须以“今日要点一：”开头，归纳入选文章背后的共同趋势。
+- 第 4 条必须以“今日要点二：”开头，归纳另一个行业方向或结构性变化。
+- 第 5 条必须以“今日值得继续关注：”开头。
 - 每条不超过 80 个中文字符；每条只表达一个判断。
 - 不要使用“今日主要变化”这个说法。
 - 不要逐条复述入选文章标题，不要堆砌公司名和新闻标题。
@@ -143,8 +145,8 @@ class NewsSummarizer:
 
 JSON schema：
 {{
-  "subject": "AI 前沿日报｜{digest_date.isoformat()}",
-  "opening_summary": "- 今日共抓取候选链接 X 条，成功提取正文 Y 篇，最终精选 Z 条进入日报。\\n- 今日要点一：...\\n- 今日要点二：...\\n- 今日值得继续关注：...",
+  "subject": "AI 前沿日报｜{digest_date}",
+  "opening_summary": "- 本期抓取范围：北京时间 YYYY-MM-DD HH:mm 至 YYYY-MM-DD HH:mm。\\n- 今日共抓取候选链接 X 条，成功提取正文 Y 篇，最终精选 Z 条进入日报。\\n- 今日要点一：...\\n- 今日要点二：...\\n- 今日值得继续关注：...",
   "trend": "",
   "items": [
     {{
@@ -292,7 +294,7 @@ JSON schema：
 - 保持原 JSON 字段，不要增加字段。
 - 不改变来源、链接，不编造信息。
 - 对单一媒体报道使用“据报道”“报道称”“该文称”“尚待进一步确认”等措辞。
-- opening_summary 必须是 4 条 bullet，依次为抓取统计、今日要点一、今日要点二、今日值得继续关注。
+- opening_summary 必须是 5 条 bullet，依次为抓取范围、抓取统计、今日要点一、今日要点二、今日值得继续关注。
 - 今日要点必须总结共同趋势，不要复述文章标题。
 - trend 必须输出空字符串 ""。
 - items 最多 {max_items} 条，同一来源最多 {max_per_source} 条。
@@ -356,7 +358,9 @@ JSON schema：
     ) -> str:
         total_candidates = int(stats.get("total_candidates", 0))
         total_kept = int(stats.get("total_kept", 0))
-        required = (
+        window_text = str(stats.get("window_text", "北京时间过去 24 小时"))
+        window_line = f"- 本期抓取范围：北京时间 {window_text}。"
+        count_line = (
             f"- 今日共抓取候选链接 {total_candidates} 条，"
             f"成功提取正文 {total_kept} 篇，最终精选 {final_selected} 条进入日报。"
         )
@@ -364,14 +368,17 @@ JSON schema：
         useful_lines = [
             self._trim_text(self._remove_banned_words(line), 80)
             for line in lines
-            if "今日共抓取候选链接" not in line and "今日主要变化" not in line
+            if "本期抓取范围" not in line
+            and "今日共抓取候选链接" not in line
+            and "今日主要变化" not in line
         ]
         point_one = next((line for line in useful_lines if "今日要点一：" in line), "- 今日要点一：今日内容集中在 AI 产品、商业化或产业进展。")
         point_two = next((line for line in useful_lines if "今日要点二：" in line), "- 今日要点二：入选事项仍需结合后续官方信息和市场反馈观察。")
         follow = next((line for line in useful_lines if "今日值得继续关注：" in line), "- 今日值得继续关注：AI 应用落地、算力供给与头部公司竞争变化。")
         return "\n".join(
             [
-                required,
+                self._trim_text(window_line, 80),
+                count_line,
                 self._trim_text(point_one, 80),
                 self._trim_text(point_two, 80),
                 self._trim_text(follow, 80),

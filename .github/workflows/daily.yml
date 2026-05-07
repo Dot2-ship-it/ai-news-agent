@@ -22,4 +22,4 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          LOOKBACK_HOURS: "48"
+          LOOKBACK_HOURS: "24"

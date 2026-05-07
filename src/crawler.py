@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import timedelta
+from datetime import datetime
 from urllib.parse import urlparse
 
 import httpx
@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 
 from .extractor import extract_article_text, extract_article_title, extract_published_at
 from .models import Article, ArticleCandidate, SourceConfig, SourceRunResult
-from .utils import clean_url, normalize_title, now_utc
+from .utils import clean_url, normalize_title
 
 logger = logging.getLogger(__name__)
 
@@ -139,10 +139,14 @@ class NewsCrawler:
             content=content,
         )
 
-    def crawl_source(self, source: SourceConfig, lookback_hours: int) -> tuple[list[Article], SourceRunResult]:
+    def crawl_source(
+        self,
+        source: SourceConfig,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> tuple[list[Article], SourceRunResult]:
         result = SourceRunResult(source_id=source.id, source_name=source.name)
         articles: list[Article] = []
-        cutoff = now_utc() - timedelta(hours=lookback_hours)
 
         try:
             candidates = self.discover_candidates(source)
@@ -192,9 +196,13 @@ class NewsCrawler:
             if article.url in seen_urls or normalized_title in seen_titles:
                 result.filtered.append(f"列表内重复：{article.title}")
                 continue
-            if article.published_at and article.published_at < cutoff:
-                result.filtered.append(f"超过时间窗口：{article.title}")
-                continue
+            if article.published_at:
+                published_at = article.published_at.astimezone(start_time.tzinfo)
+                if published_at < start_time or published_at > end_time:
+                    result.filtered.append(f"超过时间窗口：{article.title}")
+                    continue
+            else:
+                logger.info("%s published_at missing: %s", source.name, article.url)
             seen_urls.add(article.url)
             seen_titles.add(normalized_title)
             articles.append(article)
