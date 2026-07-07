@@ -2,6 +2,8 @@ name: Daily AI News Agent
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 1 * * *"
 
 jobs:
   daily:
@@ -22,4 +24,5 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          SEC_USER_AGENT: ${{ vars.SEC_USER_AGENT || 'AI News Agent contact: no-reply@example.com' }}
           LOOKBACK_HOURS: "24"

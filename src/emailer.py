@@ -14,24 +14,45 @@ def render_email_text(digest: DailyDigest) -> str:
     lines: list[str] = [digest.subject, "", "开头摘要", digest.opening_summary.strip()]
     if digest.trend:
         lines.extend(["", digest.trend.strip()])
-    lines.extend(["", "----", "", "今日最重要的资讯"])
+    lines.extend(["", "----", "", "AI 投研主题"])
 
     if not digest.items:
         lines.extend(["", "指定来源暂未抓取到可用于生成日报的新内容。"])
         return "\n".join(lines)
 
+    topic_order = [
+        "核心信号",
+        "AI Capex / 数据中心",
+        "算力与半导体供应链",
+        "AI 公司与商业化",
+        "二级市场相关",
+        "中国 AI 产业链",
+    ]
+    grouped = {topic: [] for topic in topic_order}
     for item in digest.items:
-        lines.extend(
-            [
-                "",
-                f"【{item.importance}】{item.title}",
-                f"核心事实：{item.core_fact}",
-                f"重要意义：{item.important_meaning}",
-                "关键点：",
-            ]
-        )
-        lines.extend(f"- {point}" for point in item.key_points[:3])
-        lines.extend([f"链接：{item.url}", "", "----"])
+        grouped.setdefault(item.topic, []).append(item)
+
+    for topic in topic_order:
+        items = grouped.get(topic, [])
+        if not items:
+            continue
+        lines.extend(["", f"{topic}"])
+        for item in items:
+            lines.extend(
+                [
+                    "",
+                    f"【{item.importance}】{item.title}",
+                    f"核心事实：{item.core_fact}",
+                    f"重要意义：{item.important_meaning}",
+                    "关键点：",
+                ]
+            )
+            lines.extend(f"- {point}" for point in item.key_points[:3])
+            if item.content_status:
+                lines.extend([f"内容状态：{item.content_status}"])
+            if item.discovery_method:
+                lines.extend([f"发现方式：{item.discovery_method}"])
+            lines.extend([f"链接：{item.url}"])
     return "\n".join(lines).strip()
 
 

@@ -1,9 +1,80 @@
+tracked_companies:
+  model_companies:
+    - OpenAI
+    - Anthropic
+    - xAI
+    - DeepSeek
+    - Mistral
+  hyperscalers:
+    - Microsoft
+    - Google
+    - Alphabet
+    - Amazon
+    - AWS
+    - Meta
+    - Oracle
+  ai_chips:
+    - NVIDIA
+    - AMD
+    - Broadcom
+    - Marvell
+    - TSMC
+    - ASML
+    - Micron
+    - SK Hynix
+    - Samsung
+  ai_cloud:
+    - CoreWeave
+    - Nebius
+    - Lambda
+    - Crusoe
+    - IREN
+    - Cipher Mining
+    - TeraWulf
+    - Core Scientific
+  power_and_data_center:
+    - Vertiv
+    - Eaton
+    - GE Vernova
+    - Constellation Energy
+    - Equinix
+    - Digital Realty
+    - Bloom Energy
+  robotics:
+    - Tesla
+    - Figure AI
+    - Apptronik
+    - Unitree
+    - UBTECH
+
+time_filter:
+  default_window_hours: 24
+  official_ir_window_hours: 72
+  sec_filing_window_hours: 48
+  allow_unknown_time:
+    official_ir: false
+    sec_filing: false
+    market_news: false
+    chinese_flash: false
+    flash_news: false
+    chinese_industry: true
+
 sources:
   - id: deepmind
     name: Google DeepMind Blog
+    source_name: Google DeepMind Blog
+    source_type: market_news
+    quality_tier: 2
+    region: global
     url: https://deepmind.google/blog/
     language: en
     strategy: translate_and_summarize
+    requires_ai_filter: true
+    requires_investment_signal_filter: true
+    requires_time_filter: true
+    allow_unknown_time: false
+    crawl_depth: 1
+    investment_relevance: medium
     allowed_domains: [deepmind.google]
     include_patterns: [/blog/]
     exclude_patterns: ["?category=", "?page="]
@@ -11,36 +82,356 @@ sources:
 
   - id: 36kr_ai
     name: 36氪 AI 相关专题
+    source_name: 36氪 AI 相关专题
+    source_type: chinese_industry
+    quality_tier: 3
+    region: cn
     url: https://www.36kr.com/motif/327686782977
     language: zh
     strategy: summarize
+    requires_ai_filter: true
+    requires_investment_signal_filter: true
+    requires_time_filter: true
+    allow_unknown_time: true
+    crawl_depth: 1
+    investment_relevance: medium
     allowed_domains: [www.36kr.com, 36kr.com]
     include_patterns: [/p/]
     max_links: 25
+    strict_ai_relevance: true
 
   - id: qbitai
     name: 量子位 QbitAI
+    source_name: 量子位 QbitAI
+    source_type: chinese_industry
+    quality_tier: 3
+    region: cn
     url: https://www.qbitai.com/
     language: zh
     strategy: summarize
+    requires_ai_filter: true
+    requires_investment_signal_filter: true
+    requires_time_filter: true
+    allow_unknown_time: true
+    crawl_depth: 1
+    investment_relevance: medium
     allowed_domains: [www.qbitai.com, qbitai.com]
-    include_patterns: [/]
+    exclude_patterns: [/category/, /tag/, /events/, /about/, /zhiku/, /meet/, "智库"]
     max_links: 25
 
   - id: jiqizhixin
     name: 机器之心
+    source_name: 机器之心
+    source_type: chinese_industry
+    quality_tier: 3
+    region: cn
     url: https://www.jiqizhixin.com/
     language: zh
     strategy: summarize
+    requires_ai_filter: true
+    requires_investment_signal_filter: true
+    requires_time_filter: true
+    allow_unknown_time: true
+    crawl_depth: 1
+    investment_relevance: medium
     allowed_domains: [www.jiqizhixin.com, jiqizhixin.com]
     include_patterns: [/articles/]
     max_links: 30
 
   - id: latepost
     name: 晚点 LatePost
+    source_name: 晚点 LatePost
+    source_type: market_news
+    quality_tier: 2
+    region: cn
     url: https://www.latepost.com/
     language: zh
     strategy: summarize
+    requires_ai_filter: true
+    requires_investment_signal_filter: true
+    requires_time_filter: true
+    allow_unknown_time: true
+    crawl_depth: 1
+    investment_relevance: medium
     allowed_domains: [www.latepost.com, latepost.com]
     include_patterns: [/news/, /article/, /posts/]
     max_links: 25
+    strict_ai_relevance: true
+
+  - id: reuters_ai
+    name: Reuters AI
+    source_name: Reuters AI
+    source_type: market_news
+    quality_tier: 1
+    region: global
+    url: https://www.reuters.com/technology/artificial-intelligence/
+    language: en
+    strategy: translate_and_summarize
+    requires_ai_filter: true
+    requires_investment_signal_filter: true
+    requires_time_filter: true
+    allow_unknown_time: false
+    crawl_depth: 1
+    investment_relevance: high
+    allowed_domains: [www.reuters.com, reuters.com]
+    include_patterns: [/technology/, /business/, /markets/, /world/]
+    fetch_strategy:
+      discovery_mode: list_page
+      body_mode: optional
+      allow_partial_article: true
+      fallback_discovery: [gdelt]
+    gdelt_domains: [reuters.com]
+    gdelt_query_terms:
+      - artificial intelligence
+      - Nvidia
+      - data center
+      - GPU
+      - OpenAI
+      - Anthropic
+      - Microsoft
+      - Meta
+      - Oracle
+      - capex
+      - power
+      - grid
+      - cooling
+    max_links: 30
+
+  - id: the_information_ai_agenda
+    name: The Information AI Agenda
+    source_name: The Information AI Agenda
+    source_type: premium_business_news
+    quality_tier: 1
+    region: us
+    url: https://www.theinformation.com/features/ai-agenda
+    language: en
+    strategy: translate_and_summarize
+    requires_ai_filter: true
+    requires_investment_signal_filter: true
+    requires_time_filter: true
+    allow_unknown_time: false
+    crawl_depth: 1
+    investment_relevance: high
+    allowed_domains: [www.theinformation.com, theinformation.com]
+    include_patterns: [/articles/, /briefings/, /features/]
+    fetch_strategy:
+      discovery_mode: premium_title_only
+      body_mode: disabled
+      allow_partial_article: true
+    max_links: 20
+
+  - id: semianalysis
+    name: SemiAnalysis
+    source_name: SemiAnalysis
+    source_type: semiconductor_research
+    quality_tier: 1
+    region: global
+    url: https://semianalysis.com/
+    language: en
+    strategy: translate_and_summarize
+    requires_ai_filter: true
+    requires_investment_signal_filter: true
+    requires_time_filter: true
+    allow_unknown_time: true
+    crawl_depth: 1
+    investment_relevance: high
+    allowed_domains: [semianalysis.com, www.semianalysis.com]
+    include_patterns: [/]
+    exclude_patterns: [/tag/, /author/, /about/, /subscribe/]
+    max_links: 25
+
+  - id: data_center_dynamics_ai
+    name: Data Center Dynamics AI
+    source_name: Data Center Dynamics AI
+    source_type: infra_media
+    quality_tier: 2
+    region: global
+    url: https://www.datacenterdynamics.com/en/news/
+    language: en
+    strategy: translate_and_summarize
+    requires_ai_filter: true
+    requires_investment_signal_filter: true
+    requires_time_filter: true
+    allow_unknown_time: false
+    crawl_depth: 1
+    investment_relevance: high
+    allowed_domains: [www.datacenterdynamics.com, datacenterdynamics.com]
+    include_patterns: [/en/news/, /en/analysis/]
+    alternate_urls:
+      - https://www.datacenterdynamics.com/en/topics-and-tech/software/ai-analytics/
+    fetch_strategy:
+      discovery_mode: list_page
+      body_mode: optional
+      allow_partial_article: true
+      fallback_discovery: [gdelt]
+    gdelt_domains: [datacenterdynamics.com]
+    gdelt_query_terms:
+      - artificial intelligence
+      - data center
+      - hyperscale
+      - Nvidia
+      - GPU
+      - power
+      - cooling
+      - lease
+      - capacity
+    max_links: 25
+
+  - id: sec_edgar_ai_companies
+    name: SEC EDGAR AI Companies
+    source_name: SEC EDGAR AI Companies
+    source_type: sec_filing
+    quality_tier: 1
+    region: us
+    url: https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K%2C10-Q%2C10-K&owner=exclude&count=100
+    language: en
+    strategy: summarize
+    requires_ai_filter: false
+    requires_investment_signal_filter: true
+    requires_time_filter: true
+    allow_unknown_time: false
+    crawl_depth: 1
+    investment_relevance: high
+    allowed_domains: [www.sec.gov, sec.gov]
+    include_patterns: [/Archives/, /ixviewer/]
+    sec_forms: [8-K, 10-Q, 10-K, 20-F, 6-K]
+    fetch_strategy:
+      discovery_mode: api
+      body_mode: optional
+      allow_partial_article: false
+    sec_ciks:
+      NVIDIA: "0001045810"
+      Microsoft: "0000789019"
+      Meta: "0001326801"
+      Alphabet: "0001652044"
+      Amazon: "0001018724"
+      Oracle: "0001341439"
+      AMD: "0000002488"
+      Broadcom: "0001730168"
+      Marvell: "0001835632"
+      Micron: "0000723125"
+    max_links: 30
+
+  - id: nvidia_ir
+    name: NVIDIA Investor Relations
+    source_name: NVIDIA Investor Relations
+    source_type: official_ir
+    quality_tier: 1
+    region: us
+    url: https://investor.nvidia.com/investor-resources/rss/default.aspx
+    language: en
+    strategy: translate_and_summarize
+    requires_ai_filter: false
+    requires_investment_signal_filter: true
+    requires_time_filter: true
+    allow_unknown_time: false
+    crawl_depth: 1
+    investment_relevance: high
+    allowed_domains: [investor.nvidia.com]
+    include_patterns: [/news/, /financial-info/, /events-and-presentations/]
+    alternate_urls:
+      - https://investor.nvidia.com/news/press-releases/default.aspx
+      - https://investor.nvidia.com/financial-info/financial-reports/default.aspx
+    fetch_strategy:
+      discovery_mode: rss
+      body_mode: optional
+      allow_partial_article: true
+    max_links: 25
+
+  - id: microsoft_ir
+    name: Microsoft Investor Relations
+    source_name: Microsoft Investor Relations
+    source_type: official_ir
+    quality_tier: 1
+    region: us
+    url: https://www.microsoft.com/en-us/Investor/earnings
+    language: en
+    strategy: translate_and_summarize
+    requires_ai_filter: false
+    requires_investment_signal_filter: true
+    requires_time_filter: true
+    allow_unknown_time: false
+    crawl_depth: 1
+    investment_relevance: high
+    allowed_domains: [www.microsoft.com, microsoft.com]
+    include_patterns: [/Investor/, /investor/, /earnings/, /annual-reports/]
+    alternate_urls:
+      - https://www.microsoft.com/en-us/Investor/annual-reports.aspx
+      - https://www.microsoft.com/en-us/Investor/events/default.aspx
+    fetch_strategy:
+      discovery_mode: list_page
+      body_mode: optional
+      allow_partial_article: true
+      fallback_discovery: [sec_api]
+    max_links: 25
+
+  - id: meta_ir
+    name: Meta Investor Relations
+    source_name: Meta Investor Relations
+    source_type: official_ir
+    quality_tier: 1
+    region: us
+    url: https://investor.atmeta.com/investor-news/default.aspx
+    language: en
+    strategy: translate_and_summarize
+    requires_ai_filter: false
+    requires_investment_signal_filter: true
+    requires_time_filter: true
+    allow_unknown_time: false
+    crawl_depth: 1
+    investment_relevance: high
+    allowed_domains: [investor.atmeta.com]
+    include_patterns: [/investor-news/, /financials/, /events/]
+    alternate_urls:
+      - https://investor.atmeta.com/financials/default.aspx
+      - https://investor.atmeta.com/events-and-presentations/default.aspx
+    fetch_strategy:
+      discovery_mode: list_page
+      body_mode: optional
+      allow_partial_article: true
+      fallback_discovery: [sec_api]
+    max_links: 25
+
+  - id: cls_ai_global
+    name: 财联社 AI / 环球市场
+    source_name: 财联社 AI / 环球市场
+    source_type: flash_news
+    quality_tier: 2
+    region: cn
+    url: https://www.cls.cn/subject/1321
+    language: zh
+    strategy: summarize
+    requires_ai_filter: true
+    requires_investment_signal_filter: true
+    requires_time_filter: true
+    allow_unknown_time: false
+    crawl_depth: 1
+    investment_relevance: high
+    allowed_domains: [www.cls.cn, cls.cn, m.cls.cn]
+    include_patterns: [/detail/, /telegraph]
+    exclude_patterns: [/subject/, /depth/, /video/, /author/]
+    fetch_strategy:
+      discovery_mode: list_page
+      body_mode: optional
+      allow_partial_article: true
+    max_links: 30
+
+  - id: zhidx_ai_industry
+    name: 智东西 AI芯片 / 机器人 / 算力
+    source_name: 智东西 AI芯片 / 机器人 / 算力
+    source_type: chinese_industry
+    quality_tier: 2
+    region: cn
+    url: https://zhidx.com/
+    language: zh
+    strategy: summarize
+    requires_ai_filter: true
+    requires_investment_signal_filter: true
+    requires_time_filter: true
+    allow_unknown_time: true
+    crawl_depth: 1
+    investment_relevance: high
+    allowed_domains: [zhidx.com, www.zhidx.com]
+    include_patterns: [/p/]
+    exclude_patterns: [/tag/, /topic/, /events/, /about/, /author/, /video/, /专题, /活动]
+    max_links: 30

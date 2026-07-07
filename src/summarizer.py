@@ -84,7 +84,7 @@ class NewsSummarizer:
         }
 
         prompt = f"""
-你是一名中文 AI 科技行业分析师，请基于给定文章生成一封中文 AI 前沿日报。
+你是一名中文 AI 科技投研分析师，请基于给定文章生成一封中文 AI 投研情报日报。
 
 总体风格：
 - 专业、克制、可信，像科技行业分析师写的简报。
@@ -98,13 +98,22 @@ class NewsSummarizer:
 
 硬性要求：
 - 只基于输入文章，不要编造。
+- 日报必须按投研主题组织，不要按来源堆叠。
+- 优先展示 investment_score 高、投研信号强、来源质量高的文章。
+- 默认排除技术教程、论文、模型测评、开源项目、Prompt、工具合集、产品体验和活动宣传。
 - 不要改变邮件结构和字段。
 - 英文文章只使用已提供的中文编辑材料继续总结，不要全文翻译。
 - 中文文章只总结。
 - 最多输出 {max_items} 条，优先输出 3-{max_items} 条。
 - 同一来源最多 {max_per_source} 条；如果其他来源有足够高质量文章，优先保留不同来源。
 - 同一事件只保留信息量最高的一篇。
+- time_status 为 time_unknown 或 unknown 的文章如果入选，core_fact 或 important_meaning 必须注明“发布时间缺失，未严格纳入 24 小时窗口”。
+- 每条 item 必须填写 topic，且只能使用这些主题之一：核心信号、AI Capex / 数据中心、算力与半导体供应链、AI 公司与商业化、二级市场相关、中国 AI 产业链。
 - importance 只能是“高”“中”“低”。
+- is_partial 为 true 或 body_status 为 body_unavailable 的文章可进入日报，但必须降权；不能压过 SEC、IR 或有完整正文的高质量内容。
+- premium_limited 只能说明“订阅限制，仅基于标题/列表页信息”，不要暗示已经读取全文。
+- partial 文章入选时，content_status 必须填写简短说明。
+- 每条 item 保留 discovery_method，用于标记 list_page、rss、sitemap、search_index、gdelt、sec_api 或 ir_rss。
 
 开头摘要写法：
 - opening_summary 必须写成 5 条短 bullet，每条以“- ”开头。
@@ -122,7 +131,7 @@ class NewsSummarizer:
 - 只基于当天抓到的内容，不做空泛预测。
 - trend 输出空字符串 ""，不要另写一段趋势。
 
-今日最重要的 3-5 条写法：
+投研情报条目写法：
 - 标题中性、准确，不要标题党。
 - title 不超过 28 个中文字符，更像专业简报标题。
 - title 不要直接堆砌完整事实；详细事实放到 core_fact。
@@ -151,15 +160,18 @@ JSON schema：
   "items": [
     {{
       "importance": "高",
+      "topic": "核心信号",
       "title": "...",
       "source": "...",
-      "url": "...",
-      "core_fact": "...",
-      "key_points": ["...", "...", "..."],
-      "important_meaning": "..."
-    }}
-  ]
-}}
+	      "url": "...",
+	      "core_fact": "...",
+	      "key_points": ["...", "...", "..."],
+	      "important_meaning": "...",
+	      "content_status": null,
+	      "discovery_method": "list_page"
+	    }}
+	  ]
+	}}
 
 抓取统计：
 {json.dumps(prompt_stats, ensure_ascii=False)}
@@ -191,6 +203,21 @@ JSON schema：
                 "language": a.source_language.value,
                 "strategy": a.source_strategy,
                 "published_at": a.published_at.isoformat() if a.published_at else None,
+                "time_status": a.time_status,
+                "time_note": "发布时间缺失，未严格纳入 24 小时窗口" if a.time_status in {"time_unknown", "unknown"} else "",
+                "source_type": a.source_type,
+                "quality_tier": a.quality_tier,
+                "investment_score": a.investment_score,
+                "matched_companies": a.matched_companies,
+                "matched_signals": a.matched_signals,
+                "topic": a.topic,
+                "body_status": a.body_status,
+                "discovery_status": a.discovery_status,
+                "content_source": a.content_source,
+                "discovery_method": a.discovery_method,
+                "is_partial": a.is_partial,
+                "partial_reason": a.partial_reason,
+                "content_status": self._content_status(a),
                 "content": a.content[:8000],
             }
             for idx, a in enumerate(articles, start=1)
@@ -198,20 +225,23 @@ JSON schema：
 
     def _rerank_articles(self, payload: list[dict[str, object]], max_items: int, max_per_source: int) -> list[str]:
         prompt = f"""
-你是中文 AI 科技日报的选题编辑。请对候选文章做 rerank，不要生成日报。
+你是中文 AI 投研日报的选题编辑。请对候选文章做 rerank，不要生成日报。
 
 评分标准：
-1. 行业影响：是否影响大模型、AI agent、算力、商业化、监管、头部公司竞争格局。
-2. 信息增量：是否提供新数据、新产品、新融资、新政策、新研究。
-3. 可信度：官方来源、权威媒体、原始信息优先。
-4. 与 AI 主题相关度：弱相关科技新闻降权。
-5. 重复度：同一事件只保留信息量最高的一篇。
+1. 投资影响：是否涉及 capex、收入、毛利率、业绩指引、订单、客户、合同、供需、监管、出口管制、融资、估值或市场反应。
+2. 产业链影响：是否影响 AI 数据中心、电力、冷却、GPU、半导体供应链、云厂商或重点 AI 公司。
+3. 可信度：官方 IR、SEC、Reuters、SemiAnalysis 等一手或高质量来源优先。
+4. 主题相关度：没有公司、财务、产业链或市场信号的泛 AI 内容降权。
+5. 噪声控制：技术教程、论文、模型测评、开源项目、Prompt、工具合集、活动宣传不要选择。
 6. 来源多样性：最终 Top {max_items} 同一来源最多 {max_per_source} 条；其他来源有足够高质量文章时，优先不同来源。
+7. 排序参考：优先使用 investment_score 高的文章。
+8. partial、GDELT fallback、premium_limited 文章只能补充信息，不能排在 SEC、IR、完整正文的高质量文章前面。
 
 要求：
 - 返回按优先级排序的候选列表，最多 10 条。
 - 每条包含 id、score、source、reason。
 - 不要选择营销化、标题党、弱 AI 相关内容。
+- premium_limited 只能按标题/列表页判断，不要假设已读取全文。
 - 不要只按抓取顺序。
 - 输出 JSON，不要解释。
 
@@ -264,6 +294,18 @@ JSON schema：
                 if len(selected) >= max_items:
                     break
         return selected
+
+    @staticmethod
+    def _content_status(article: Article) -> str | None:
+        if not article.is_partial:
+            return None
+        if article.partial_reason == "premium_limited":
+            return "订阅限制，仅基于标题/列表页信息"
+        if article.content_source == "gdelt":
+            return "GDELT fallback 发现，正文不可用"
+        if article.body_status == "body_unavailable":
+            return "正文不可用，仅基于标题/列表页信息"
+        return "部分内容可用"
 
     def _quality_check_and_rewrite(
         self,
