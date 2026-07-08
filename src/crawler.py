@@ -769,6 +769,8 @@ class NewsCrawler:
 
         try:
             candidates = self.discover_candidates(source, result)
+            if not candidates and "sec_api" in source.fetch_strategy.fallback_discovery and source.sec_ciks:
+                candidates = self._fallback_candidates(source, result)
             result.candidates = len(candidates)
             logger.info("%s discovered %s candidate links", source.name, len(candidates))
         except FetchHTTPStatusError as exc:
@@ -889,6 +891,10 @@ class NewsCrawler:
             if article.url in seen_urls or normalized_title in seen_titles:
                 result.filtered.append(f"列表内重复：{article.title}")
                 continue
+            if source.id == "semianalysis" and self._is_semianalysis_static_model_page(article):
+                result.filtered_by_relevance_count += 1
+                result.filtered.append(f"资料更新/模型工具，未入主日报：{article.title}")
+                continue
 
             decision = None
             if source.strict_ai_relevance or source.requires_ai_filter or source.requires_investment_signal_filter:
@@ -950,6 +956,19 @@ class NewsCrawler:
 
     def _fallback_candidates(self, source: SourceConfig, result: SourceRunResult) -> list[ArticleCandidate]:
         candidates: list[ArticleCandidate] = []
+        if "sec_api" in source.fetch_strategy.fallback_discovery and source.sec_ciks:
+            try:
+                candidates = self._discover_sec_filings(source)
+                for candidate in candidates:
+                    candidate.discovery_status = "sec_api_fallback"
+                    candidate.discovery_method = "sec_api"
+                    candidate.content_source = "sec_api"
+                if candidates:
+                    result.error = None
+                    result.error_type = None
+                    return candidates
+            except Exception as exc:
+                result.error = result.error or str(exc)
         if "gdelt" in source.fetch_strategy.fallback_discovery:
             gdelt_result = discover_gdelt_candidates(source)
             candidates = gdelt_result.candidates
@@ -983,6 +1002,8 @@ class NewsCrawler:
         if source.include_patterns and not any(pattern in parsed.path for pattern in source.include_patterns):
             return False
         if source.exclude_patterns and any(pattern in url for pattern in source.exclude_patterns):
+            return False
+        if source.source_type == "official_ir" and parsed.path.endswith("/default.aspx"):
             return False
         if source.id == "reuters_ai" and any(
             part in parsed.path for part in ("/pictures/", "/video/", "/graphics/", "/live-", "/live/")
@@ -1026,6 +1047,30 @@ class NewsCrawler:
         if title and any(keyword in title for keyword in QBITAI_NAV_TITLE_KEYWORDS):
             return False
         return True
+
+    @staticmethod
+    def _is_semianalysis_static_model_page(article: Article) -> bool:
+        haystack = f"{article.title}\n{article.url}".lower()
+        model_terms = (
+            "industry model",
+            "wafer fab model",
+            "accelerator hbm model",
+            "hbm model",
+            "model",
+        )
+        if not any(term in haystack for term in model_terms):
+            return False
+        update_signals = (
+            "new",
+            "updated",
+            "update",
+            "release",
+            "released",
+            "2026 update",
+            "2026",
+        )
+        has_update_signal = any(signal in haystack for signal in update_signals)
+        return article.published_at is None or not has_update_signal
 
     @staticmethod
     def _is_ai_relevant(article: Article) -> bool:

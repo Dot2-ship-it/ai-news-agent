@@ -336,6 +336,9 @@ sources:
       discovery_mode: rss
       body_mode: optional
       allow_partial_article: true
+      fallback_discovery: [sec_api]
+    sec_ciks:
+      NVIDIA: "0001045810"
     max_links: 25
 
   - id: microsoft_ir
@@ -390,6 +393,8 @@ sources:
       body_mode: optional
       allow_partial_article: true
       fallback_discovery: [sec_api]
+    sec_ciks:
+      Meta: "0001326801"
     max_links: 25
 
   - id: cls_ai_global

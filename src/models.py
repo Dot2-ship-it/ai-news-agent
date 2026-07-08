@@ -120,6 +120,29 @@ class NewsItem(BaseModel):
     important_meaning: str = Field(validation_alias=AliasChoices("important_meaning", "why_it_matters", "重要意义"))
     content_status: str | None = None
     discovery_method: str | None = None
+    published_at: str | None = None
+    time_status: str | None = None
+    investment_score: int = 0
+    is_partial: bool = False
+    industry_layer: str | None = None
+    company_layer: list[str] = Field(default_factory=list)
+    company_impact_type: list[str] = Field(default_factory=list)
+    signal_type: str | None = None
+    watch_variables: list[str] = Field(default_factory=list)
+    transmission_chain: str | None = None
+
+
+class WatchItem(BaseModel):
+    title: str
+    url: str
+    source: str
+    industry_layer: str
+    company_layer: list[str] = Field(default_factory=list)
+    signal_type: str
+    score: int
+    status: str
+    watch_variables: list[str] = Field(default_factory=list)
+    discovery_method: str | None = None
 
 
 class DailyDigest(BaseModel):
@@ -127,6 +150,7 @@ class DailyDigest(BaseModel):
     opening_summary: str
     trend: str
     items: list[NewsItem]
+    watchlist: list[WatchItem] = Field(default_factory=list)
 
 
 class SourceRunResult(BaseModel):

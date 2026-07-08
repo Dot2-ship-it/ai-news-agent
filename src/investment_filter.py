@@ -175,6 +175,131 @@ SIGNAL_GROUPS = {
     "sec_filing": ("10-Q", "10-K", "8-K", "filing", "filed", "annual report", "quarterly report"),
 }
 
+INDUSTRY_LAYER_KEYWORDS = {
+    "政策 / 监管 / 出口管制": (
+        "export control",
+        "regulation",
+        "antitrust",
+        "出口管制",
+        "监管",
+        "反垄断",
+        "数据安全",
+    ),
+    "半导体与硬件供应链": (
+        "GPU",
+        "Blackwell",
+        "HBM",
+        "DRAM",
+        "PCB",
+        "先进封装",
+        "光模块",
+        "晶圆",
+        "EUV",
+        "存储",
+        "semiconductor",
+        "accelerator",
+        "chip",
+    ),
+    "数据中心与电力": (
+        "data center",
+        "datacenter",
+        "MW",
+        "GW",
+        "power",
+        "grid",
+        "cooling",
+        "liquid cooling",
+        "液冷",
+        "电力",
+        "电网",
+        "核电",
+    ),
+    "AI Capex / 算力基础设施": (
+        "capex",
+        "capital expenditure",
+        "Azure",
+        "AWS",
+        "Oracle Cloud",
+        "Meta infrastructure",
+        "AI cloud",
+        "hyperscale",
+        "neocloud",
+        "算力",
+        "资本开支",
+    ),
+    "AI 模型公司与商业化": (
+        "OpenAI",
+        "Anthropic",
+        "xAI",
+        "DeepSeek",
+        "API",
+        "subscription",
+        "enterprise customer",
+        "商业化",
+        "订阅",
+        "企业客户",
+    ),
+    "机器人 / 具身智能": (
+        "robot",
+        "robotics",
+        "具身智能",
+        "Tesla Optimus",
+        "Unitree",
+        "UBTECH",
+        "机器人",
+    ),
+    "二级市场与资金面": (
+        "shares",
+        "stock",
+        "analyst",
+        "valuation",
+        "rating",
+        "股价",
+        "分析师",
+        "估值",
+        "评级",
+        "资金",
+        "去杠杆",
+        "回调",
+        "市场预期",
+    ),
+}
+
+COMPANY_IMPACT_KEYWORDS = {
+    "收入": ("revenue", "sales", "收入", "营收"),
+    "毛利率": ("margin", "gross margin", "毛利率"),
+    "资本开支": ("capex", "capital expenditure", "资本开支"),
+    "订单": ("order", "backlog", "contract", "订单", "积压订单", "合同"),
+    "估值": ("valuation", "multiple", "估值"),
+    "融资": ("funding", "financing", "IPO", "融资", "上市"),
+    "供需": ("supply", "demand", "capacity", "utilization", "供给", "需求", "产能", "利用率"),
+    "成本": ("cost", "price", "tariff", "成本", "价格", "关税"),
+    "股价预期": ("shares", "stock", "analyst", "rating", "股价", "评级", "分析师"),
+    "监管风险": ("regulation", "export control", "antitrust", "监管", "出口管制", "反垄断"),
+}
+
+WATCH_VARIABLES_BY_LAYER = {
+    "AI Capex / 算力基础设施": ("云厂商 capex 指引", "AI 云租赁价格", "GPU 交付节奏", "算力利用率"),
+    "半导体与硬件供应链": ("GPU 交付周期", "HBM 价格", "先进封装产能", "存储价格"),
+    "数据中心与电力": ("MW/GW 签约容量", "电力接入进度", "液冷成本", "数据中心利用率"),
+    "AI 模型公司与商业化": ("API 收入", "企业客户续约", "订阅转化率", "推理成本"),
+    "AI 应用与软件": ("付费转化", "企业席位数", "客户留存", "单位推理成本"),
+    "机器人 / 具身智能": ("量产节奏", "BOM 成本", "交付订单", "应用场景验证"),
+    "政策 / 监管 / 出口管制": ("监管落地时间", "出口许可范围", "受限地区", "合规成本"),
+    "二级市场与资金面": ("股价反应", "估值倍数", "资金流向", "分析师预期修正"),
+}
+
+TRANSMISSION_BY_LAYER = {
+    "AI Capex / 算力基础设施": "云厂商资本开支变化会传导至 GPU 订单、AI 云供给和租赁价格假设。",
+    "半导体与硬件供应链": "硬件供需变化会传导至 GPU 出货、HBM 定价、封装产能和相关供应商订单。",
+    "数据中心与电力": "数据中心容量和电力约束会传导至 AI 云扩张节奏、租赁成本和基建 ROI 预期。",
+    "AI 模型公司与商业化": "模型公司商业化进展会传导至 API 收入、企业订阅转化和推理成本假设。",
+    "AI 应用与软件": "应用侧采用率变化会传导至软件收入、席位扩张和模型调用量。",
+    "机器人 / 具身智能": "量产与订单验证会传导至硬件供应链需求、BOM 成本和收入兑现节奏。",
+    "政策 / 监管 / 出口管制": "监管和出口限制会传导至供给可得性、合规成本和相关公司估值折价。",
+    "二级市场与资金面": "资金面和预期变化会传导至估值倍数、股价弹性和市场风险偏好。",
+}
+
 
 @dataclass
 class InvestmentDecision:
@@ -222,6 +347,79 @@ def signal_matches(text: str) -> list[str]:
         if contains_any(text, keywords):
             matches.append(signal)
     return matches
+
+
+def infer_industry_layer(text: str) -> str:
+    title = text.split("\n", 1)[0]
+    if contains_any(text, INDUSTRY_LAYER_KEYWORDS["政策 / 监管 / 出口管制"]):
+        return "政策 / 监管 / 出口管制"
+    if contains_any(title, ("Blackwell", "HBM", "DRAM", "PCB", "芯片", "半导体", "SK Hynix", "NVIDIA", "AMD")):
+        return "半导体与硬件供应链"
+    if contains_any(text, INDUSTRY_LAYER_KEYWORDS["数据中心与电力"]):
+        return "数据中心与电力"
+    if contains_any(text, INDUSTRY_LAYER_KEYWORDS["AI Capex / 算力基础设施"]):
+        return "AI Capex / 算力基础设施"
+    if contains_any(text, INDUSTRY_LAYER_KEYWORDS["半导体与硬件供应链"]):
+        return "半导体与硬件供应链"
+    for layer in ("AI 模型公司与商业化", "机器人 / 具身智能", "二级市场与资金面"):
+        if contains_any(text, INDUSTRY_LAYER_KEYWORDS[layer]):
+            return layer
+    if contains_any(text, AI_KEYWORDS):
+        return "AI 模型公司与商业化"
+    return "AI 应用与软件"
+
+
+def infer_company_impact_type(text: str) -> list[str]:
+    impacts = [impact for impact, keywords in COMPANY_IMPACT_KEYWORDS.items() if contains_any(text, keywords)]
+    if impacts:
+        return impacts[:4]
+    return ["收入"] if contains_any(text, ("customer", "客户", "商业化")) else ["供需"]
+
+
+def infer_signal_type(text: str, impacts: list[str], signals: list[str] | None = None) -> str:
+    signals = signals or []
+    if "regulation_or_export_control" in signals or "监管风险" in impacts:
+        return "监管 / 出口管制"
+    if "capex" in signals or "资本开支" in impacts:
+        return "资本开支"
+    if "data_center_or_power" in signals:
+        return "数据中心 / 电力约束"
+    if "order_or_contract" in signals or "订单" in impacts:
+        return "订单 / 客户"
+    if "funding_or_valuation" in signals or any(impact in impacts for impact in ("融资", "估值")):
+        return "融资 / 估值"
+    if "market_reaction" in signals or "股价预期" in impacts:
+        return "市场预期"
+    if contains_any(text, ("API", "subscription", "enterprise customer", "商业化", "订阅")):
+        return "商业化"
+    return " / ".join(impacts[:2]) if impacts else "产业链信号"
+
+
+def derive_report_fields(
+    *,
+    title: str,
+    content: str,
+    url: str = "",
+    company_matches: list[str] | None = None,
+    signal_matches_: list[str] | None = None,
+    tracked_companies: dict[str, list[str]] | None = None,
+) -> dict[str, object]:
+    text = f"{title}\n{content}\n{url}"
+    companies = list(company_matches or [])
+    if not companies and tracked_companies:
+        companies = matched_companies(text, tracked_companies)
+    signals = list(signal_matches_ or signal_matches(text))
+    layer = infer_industry_layer(text)
+    impacts = infer_company_impact_type(text)
+    variables = list(WATCH_VARIABLES_BY_LAYER.get(layer, ("收入兑现", "订单变化", "成本变化")))[:4]
+    return {
+        "industry_layer": layer,
+        "company_layer": companies[:8],
+        "company_impact_type": impacts,
+        "signal_type": infer_signal_type(text, impacts, signals),
+        "watch_variables": variables,
+        "transmission_chain": TRANSMISSION_BY_LAYER.get(layer, "该事件会传导至相关公司的收入、成本和估值假设。"),
+    }
 
 
 def classify_topic(article: Article, signals: list[str]) -> str:

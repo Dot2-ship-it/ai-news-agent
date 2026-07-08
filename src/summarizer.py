@@ -6,7 +6,8 @@ import re
 
 from openai import OpenAI
 
-from .models import Article, DailyDigest
+from .investment_filter import derive_report_fields
+from .models import Article, DailyDigest, WatchItem
 
 
 BANNED_STYLE_WORDS = [
@@ -28,6 +29,9 @@ BANNED_STYLE_WORDS = [
     "封神",
 ]
 
+WATCHLIST_THRESHOLD = 45
+MAIN_STORY_THRESHOLD = 80
+
 
 class NewsSummarizer:
     def __init__(self, model: str) -> None:
@@ -44,14 +48,15 @@ class NewsSummarizer:
     def build_empty_digest(digest_date: str, stats: dict[str, object] | None = None) -> DailyDigest:
         stats = stats or {}
         total_candidates = int(stats.get("total_candidates", 0))
+        total_fetched = int(stats.get("total_fetched", 0))
         total_kept = int(stats.get("total_kept", 0))
         window_text = str(stats.get("window_text", "北京时间过去 24 小时"))
         return DailyDigest(
-            subject=f"AI 前沿日报｜{digest_date}",
+            subject=f"AI 投研情报日报｜{digest_date}",
             opening_summary=(
                 f"- 本期抓取范围：北京时间 {window_text}。\n"
                 f"- 今日共抓取候选链接 {total_candidates} 条，"
-                f"成功提取正文 {total_kept} 篇，最终精选 0 条进入日报。\n"
+                f"成功提取正文 {total_fetched} 篇，通过投研过滤保留 {total_kept} 篇，最终精选 0 条进入日报。\n"
                 "- 今日要点一：指定来源暂未形成可用于日报的新增内容。\n"
                 "- 今日要点二：部分来源可能无更新、被时间窗口过滤或抓取失败。\n"
                 "- 今日值得继续关注：后续来源更新及可验证的 AI 产品、研究和商业化进展。"
@@ -114,11 +119,12 @@ class NewsSummarizer:
 - premium_limited 只能说明“订阅限制，仅基于标题/列表页信息”，不要暗示已经读取全文。
 - partial 文章入选时，content_status 必须填写简短说明。
 - 每条 item 保留 discovery_method，用于标记 list_page、rss、sitemap、search_index、gdelt、sec_api 或 ir_rss。
+- 每条 item 尽量保留 published_at、time_status、investment_score、is_partial；这些字段用于后续投研结构化渲染。
 
 开头摘要写法：
 - opening_summary 必须写成 5 条短 bullet，每条以“- ”开头。
 - 第 1 条必须严格包含：本期抓取范围：北京时间 YYYY-MM-DD HH:mm 至 YYYY-MM-DD HH:mm。
-- 第 2 条必须严格包含：今日共抓取候选链接 X 条，成功提取正文 Y 篇，最终精选 Z 条进入日报。
+- 第 2 条必须严格包含：今日共抓取候选链接 X 条，成功提取正文 Y 篇，通过投研过滤保留 K 篇，最终精选 Z 条进入日报。
 - 第 3 条必须以“今日要点一：”开头，归纳入选文章背后的共同趋势。
 - 第 4 条必须以“今日要点二：”开头，归纳另一个行业方向或结构性变化。
 - 第 5 条必须以“今日值得继续关注：”开头。
@@ -154,8 +160,8 @@ class NewsSummarizer:
 
 JSON schema：
 {{
-  "subject": "AI 前沿日报｜{digest_date}",
-  "opening_summary": "- 本期抓取范围：北京时间 YYYY-MM-DD HH:mm 至 YYYY-MM-DD HH:mm。\\n- 今日共抓取候选链接 X 条，成功提取正文 Y 篇，最终精选 Z 条进入日报。\\n- 今日要点一：...\\n- 今日要点二：...\\n- 今日值得继续关注：...",
+	  "subject": "AI 投研情报日报｜{digest_date}",
+  "opening_summary": "- 本期抓取范围：北京时间 YYYY-MM-DD HH:mm 至 YYYY-MM-DD HH:mm。\\n- 今日共抓取候选链接 X 条，成功提取正文 Y 篇，通过投研过滤保留 K 篇，最终精选 Z 条进入日报。\\n- 今日要点一：...\\n- 今日要点二：...\\n- 今日值得继续关注：...",
   "trend": "",
   "items": [
     {{
@@ -168,7 +174,11 @@ JSON schema：
 	      "key_points": ["...", "...", "..."],
 	      "important_meaning": "...",
 	      "content_status": null,
-	      "discovery_method": "list_page"
+	      "discovery_method": "list_page",
+	      "published_at": null,
+	      "time_status": "published_within_window",
+	      "investment_score": 80,
+	      "is_partial": false
 	    }}
 	  ]
 	}}
@@ -186,17 +196,19 @@ JSON schema：
             response_format={"type": "json_object"},
         )
         digest = self._parse_digest(response.choices[0].message.content or "{}")
-        return self._quality_check_and_rewrite(
+        checked = self._quality_check_and_rewrite(
             digest,
             stats=prompt_stats,
             max_items=max_items,
             max_per_source=max_per_source,
         )
+        return self._enrich_digest(checked, articles)
 
     def _article_payload(self, articles: list[Article]) -> list[dict[str, object]]:
         return [
             {
                 "id": f"a{idx}",
+                "source_id": a.source_id,
                 "title": a.title,
                 "source": a.source_name,
                 "url": a.url,
@@ -236,6 +248,7 @@ JSON schema：
 6. 来源多样性：最终 Top {max_items} 同一来源最多 {max_per_source} 条；其他来源有足够高质量文章时，优先不同来源。
 7. 排序参考：优先使用 investment_score 高的文章。
 8. partial、GDELT fallback、premium_limited 文章只能补充信息，不能排在 SEC、IR、完整正文的高质量文章前面。
+9. SemiAnalysis 主日报最多 1 条；LatePost 主日报最多 2 条。
 
 要求：
 - 返回按优先级排序的候选列表，最多 10 条。
@@ -268,8 +281,10 @@ JSON schema：
             ranked = []
 
         source_by_id = {str(item["id"]): str(item["source"]) for item in payload}
+        source_id_by_id = {str(item["id"]): str(item.get("source_id", "")) for item in payload}
         selected: list[str] = []
         source_counts: dict[str, int] = {}
+        source_id_counts: dict[str, int] = {}
 
         for item in ranked:
             article_id = str(item.get("id", ""))
@@ -278,8 +293,12 @@ JSON schema：
                 continue
             if source_counts.get(source, 0) >= max_per_source:
                 continue
+            source_id = source_id_by_id.get(article_id, "")
+            if self._source_specific_limit_reached(source_id, source_id_counts):
+                continue
             selected.append(article_id)
             source_counts[source] = source_counts.get(source, 0) + 1
+            source_id_counts[source_id] = source_id_counts.get(source_id, 0) + 1
             if len(selected) >= max_items:
                 break
 
@@ -289,11 +308,32 @@ JSON schema：
                 source = str(item["source"])
                 if article_id in selected or source_counts.get(source, 0) >= max_per_source:
                     continue
+                source_id = source_id_by_id.get(article_id, "")
+                if self._source_specific_limit_reached(source_id, source_id_counts):
+                    continue
                 selected.append(article_id)
                 source_counts[source] = source_counts.get(source, 0) + 1
+                source_id_counts[source_id] = source_id_counts.get(source_id, 0) + 1
                 if len(selected) >= max_items:
                     break
         return selected
+
+    @staticmethod
+    def _source_specific_limit_reached(source_id: str, source_id_counts: dict[str, int]) -> bool:
+        limits = {
+            "semianalysis": 1,
+            "latepost": 2,
+        }
+        limit = limits.get(source_id)
+        return limit is not None and source_id_counts.get(source_id, 0) >= limit
+
+    @staticmethod
+    def _source_name_specific_limit_reached(source_name: str, source_counts: dict[str, int]) -> bool:
+        if source_name == "SemiAnalysis":
+            return source_counts.get(source_name, 0) >= 1
+        if "LatePost" in source_name or "晚点" in source_name:
+            return source_counts.get(source_name, 0) >= 2
+        return False
 
     @staticmethod
     def _content_status(article: Article) -> str | None:
@@ -307,6 +347,101 @@ JSON schema：
             return "正文不可用，仅基于标题/列表页信息"
         return "部分内容可用"
 
+    def _enrich_digest(self, digest: DailyDigest, articles: list[Article]) -> DailyDigest:
+        article_by_url = {article.url: article for article in articles}
+        enriched_items = []
+        selected_urls: set[str] = set()
+        for item in digest.items:
+            article = article_by_url.get(item.url)
+            if article:
+                selected_urls.add(article.url)
+                content = "\n".join(
+                    [
+                        item.core_fact,
+                        item.important_meaning,
+                        "\n".join(item.key_points),
+                        article.content[:1200],
+                    ]
+                )
+                fields = derive_report_fields(
+                    title=item.title,
+                    content=content,
+                    url=item.url,
+                    company_matches=article.matched_companies,
+                    signal_matches_=article.matched_signals,
+                )
+                enriched_items.append(
+                    item.model_copy(
+                        update={
+                            **fields,
+                            "published_at": article.published_at.isoformat() if article.published_at else None,
+                            "time_status": article.time_status,
+                            "investment_score": article.investment_score,
+                            "is_partial": article.is_partial,
+                            "content_status": item.content_status or self._content_status(article),
+                            "discovery_method": item.discovery_method or article.discovery_method,
+                        }
+                    )
+                )
+            else:
+                fields = derive_report_fields(
+                    title=item.title,
+                    content="\n".join([item.core_fact, item.important_meaning, "\n".join(item.key_points)]),
+                    url=item.url,
+                    company_matches=item.company_layer,
+                )
+                enriched_items.append(item.model_copy(update=fields))
+        return digest.model_copy(
+            update={
+                "items": enriched_items,
+                "watchlist": self._build_watchlist(articles, selected_urls),
+            }
+        )
+
+    def _build_watchlist(self, articles: list[Article], selected_urls: set[str]) -> list[WatchItem]:
+        watchlist: list[WatchItem] = []
+        for article in articles:
+            if article.url in selected_urls:
+                continue
+            has_unknown_time = article.time_status in {"time_unknown", "unknown"}
+            should_watch = (
+                WATCHLIST_THRESHOLD <= article.investment_score < MAIN_STORY_THRESHOLD
+                or (article.is_partial and article.investment_score >= WATCHLIST_THRESHOLD)
+                or (has_unknown_time and bool(article.matched_signals))
+            )
+            if not should_watch:
+                continue
+            fields = derive_report_fields(
+                title=article.title,
+                content=article.content[:1600],
+                url=article.url,
+                company_matches=article.matched_companies,
+                signal_matches_=article.matched_signals,
+            )
+            status_parts = []
+            if article.is_partial:
+                status_parts.append("partial")
+            if has_unknown_time:
+                status_parts.append("time_unknown")
+            if article.content_source in {"gdelt", "list_page"}:
+                status_parts.append(article.content_source)
+            watchlist.append(
+                WatchItem(
+                    title=article.title,
+                    url=article.url,
+                    source=article.source_name,
+                    industry_layer=str(fields["industry_layer"]),
+                    company_layer=list(fields["company_layer"]),
+                    signal_type=str(fields["signal_type"]),
+                    score=article.investment_score,
+                    status=" / ".join(status_parts) or "watch",
+                    watch_variables=list(fields["watch_variables"]),
+                    discovery_method=article.discovery_method,
+                )
+            )
+        watchlist.sort(key=lambda item: (-item.score, item.status, item.source))
+        return watchlist[:10]
+
     def _quality_check_and_rewrite(
         self,
         digest: DailyDigest,
@@ -315,7 +450,7 @@ JSON schema：
         max_per_source: int,
     ) -> DailyDigest:
         prompt = f"""
-请对下面这封 AI 前沿日报做最终质量自检，并在必要时直接改写为合格版本。
+	请对下面这封 AI 投研情报日报做最终质量自检，并在必要时直接改写为合格版本。
 
 自检项：
 1. 是否还出现“一句话概括”；如果有，全部改为 core_fact。
@@ -332,7 +467,7 @@ JSON schema：
 12. 是否存在被截断的词语、公司名或产品名；如果有，必须重写为完整短句。
 
 改写规则：
-- 保持邮件标题格式：AI 前沿日报｜YYYY-MM-DD。
+	- 保持邮件标题格式：AI 投研情报日报｜YYYY-MM-DD。
 - 保持原 JSON 字段，不要增加字段。
 - 不改变来源、链接，不编造信息。
 - 对单一媒体报道使用“据报道”“报道称”“该文称”“尚待进一步确认”等措辞。
@@ -376,6 +511,8 @@ JSON schema：
         for item in digest.items:
             if source_counts.get(item.source, 0) >= max_per_source:
                 continue
+            if self._source_name_specific_limit_reached(item.source, source_counts):
+                continue
             source_counts[item.source] = source_counts.get(item.source, 0) + 1
             clean_points = [self._trim_text(point, 50) for point in item.key_points[:3]]
             items.append(
@@ -390,7 +527,9 @@ JSON schema：
             )
         final_items = items[:max_items]
         opening_summary = self._normalize_opening_summary(digest.opening_summary, stats, len(final_items))
-        return digest.model_copy(update={"opening_summary": opening_summary, "trend": "", "items": final_items})
+        subject_date = digest.subject.split("｜")[-1] if "｜" in digest.subject else ""
+        subject = f"AI 投研情报日报｜{subject_date}" if subject_date else digest.subject.replace("AI 前沿日报", "AI 投研情报日报")
+        return digest.model_copy(update={"subject": subject, "opening_summary": opening_summary, "trend": "", "items": final_items})
 
     def _normalize_opening_summary(
         self,
@@ -399,12 +538,13 @@ JSON schema：
         final_selected: int,
     ) -> str:
         total_candidates = int(stats.get("total_candidates", 0))
+        total_fetched = int(stats.get("total_fetched", 0))
         total_kept = int(stats.get("total_kept", 0))
         window_text = str(stats.get("window_text", "北京时间过去 24 小时"))
         window_line = f"- 本期抓取范围：北京时间 {window_text}。"
         count_line = (
             f"- 今日共抓取候选链接 {total_candidates} 条，"
-            f"成功提取正文 {total_kept} 篇，最终精选 {final_selected} 条进入日报。"
+            f"成功提取正文 {total_fetched} 篇，通过投研过滤保留 {total_kept} 篇，最终精选 {final_selected} 条进入日报。"
         )
         lines = [line.strip() for line in opening_summary.splitlines() if line.strip().startswith("-")]
         useful_lines = [

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def render_diagnostics_text(source_stats: list[dict[str, object]]) -> str:
-    lines = ["", "----", "", "噪声过滤说明 / 抓取诊断"]
+    lines = ["", "六、抓取诊断"]
     for stat in source_stats:
         lines.append(
             (
