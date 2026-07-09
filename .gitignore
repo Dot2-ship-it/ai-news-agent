@@ -3,6 +3,7 @@
 __pycache__/
 *.py[cod]
 .cache/
+artifacts/
 .pytest_cache/
 .mypy_cache/
 .DS_Store

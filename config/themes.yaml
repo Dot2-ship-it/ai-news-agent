@@ -1,0 +1,31 @@
+themes:
+  - id: ai_capex_roi
+    name: AI capex 回报压力
+    keywords: [capex, capital expenditure, ROI, 回报, 资本开支, 投入回报, 估值回落]
+  - id: gpu_cloud_supply
+    name: 算力供需与 GPU 云租赁
+    keywords: [GPU, cloud, lease, rental, utilization, 算力, 云租赁, 租赁价格, 利用率]
+  - id: hbm_dram_supply
+    name: HBM / DRAM / 存储供需
+    keywords: [HBM, DRAM, NAND, memory, 存储, 海力士, SK Hynix, 美光, Micron]
+  - id: data_center_power
+    name: 数据中心与电力约束
+    keywords: [data center, datacenter, MW, GW, power, grid, cooling, 数据中心, 电力, 电网, 液冷]
+  - id: china_model_commercialization
+    name: 中国大模型商业化
+    keywords: [中国, 国产, 大模型, API, 订阅, 企业客户, 商业化, DeepSeek]
+  - id: china_ai_chip_substitution
+    name: 国产 AI 芯片与推理芯片替代
+    keywords: [国产芯片, 推理芯片, AI 芯片, 替代, 华为, 寒武纪, 芯片国产化]
+  - id: robotics_mass_production
+    name: 机器人 / 具身智能量产
+    keywords: [robot, robotics, 机器人, 具身智能, Optimus, Unitree, UBTECH, 量产]
+  - id: ai_app_api_revenue
+    name: AI 应用商业化与 API 收入
+    keywords: [API, revenue, subscription, enterprise customer, 应用, 收入, 订阅, 企业客户]
+  - id: export_control_geopolitics
+    name: 出口管制与地缘监管
+    keywords: [export control, sanction, regulation, license, 出口管制, 制裁, 监管, 出口许可, 地缘]
+  - id: ai_company_valuation
+    name: AI 公司估值重定价
+    keywords: [valuation, shares, stock, multiple, re-rating, 估值, 股价, 重定价, 回落]

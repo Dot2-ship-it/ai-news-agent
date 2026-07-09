@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from urllib.parse import urlparse
 
 from openai import OpenAI
 
@@ -31,6 +32,20 @@ BANNED_STYLE_WORDS = [
 
 WATCHLIST_THRESHOLD = 45
 MAIN_STORY_THRESHOLD = 80
+OBSERVATION_POOL_BLOCKLIST = (
+    "semianalysis",
+    "core research",
+    "data product",
+    "data products",
+    "semianalysis-data-products",
+    "chipbook",
+    "events",
+    "semianalysis-events",
+    "join exclusive tech events",
+    "compliance policies",
+    "compliance polices",
+    "products",
+)
 
 
 class NewsSummarizer:
@@ -403,6 +418,8 @@ JSON schema：
         for article in articles:
             if article.url in selected_urls:
                 continue
+            if not self._is_observation_pool_candidate(article):
+                continue
             has_unknown_time = article.time_status in {"time_unknown", "unknown"}
             should_watch = (
                 WATCHLIST_THRESHOLD <= article.investment_score < MAIN_STORY_THRESHOLD
@@ -432,6 +449,9 @@ JSON schema：
                     source=article.source_name,
                     industry_layer=str(fields["industry_layer"]),
                     company_layer=list(fields["company_layer"]),
+                    direct_companies=list(fields["direct_companies"]),
+                    inferred_companies=list(fields["inferred_companies"]),
+                    watch_companies=list(fields["watch_companies"]),
                     signal_type=str(fields["signal_type"]),
                     score=article.investment_score,
                     status=" / ".join(status_parts) or "watch",
@@ -441,6 +461,24 @@ JSON schema：
             )
         watchlist.sort(key=lambda item: (-item.score, item.status, item.source))
         return watchlist[:10]
+
+    @staticmethod
+    def _is_observation_pool_candidate(article: Article) -> bool:
+        parsed = urlparse(article.url)
+        path = parsed.path.strip("/").lower()
+        title = article.title.strip().lower()
+        haystack = f"{title} {path}"
+        if not path:
+            return False
+        if any(keyword in haystack for keyword in OBSERVATION_POOL_BLOCKLIST):
+            return False
+        if title in {"semianalysis", "core research", "data product", "chipbook", "events", "compliance policies"}:
+            return False
+        has_unknown_time = article.time_status in {"time_unknown", "unknown"}
+        body_unavailable = article.body_status != "body_available" or article.is_partial
+        if has_unknown_time and body_unavailable and article.content_source in {"list_page", "gdelt"}:
+            return False
+        return True
 
     def _quality_check_and_rewrite(
         self,

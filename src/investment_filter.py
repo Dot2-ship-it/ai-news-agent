@@ -265,6 +265,61 @@ INDUSTRY_LAYER_KEYWORDS = {
     ),
 }
 
+POLICY_ACTION_KEYWORDS = (
+    "government",
+    "regulator",
+    "regulatory agency",
+    "law",
+    "sanction",
+    "license",
+    "export license",
+    "export restriction",
+    "export control",
+    "compliance penalty",
+    "regional restriction",
+    "commerce department",
+    "sec",
+    "ftc",
+    "doj",
+    "eu commission",
+    "政府",
+    "监管机构",
+    "法律",
+    "制裁",
+    "出口许可",
+    "出口限制",
+    "出口管制",
+    "合规处罚",
+    "地区限制",
+    "商务部",
+    "证监会",
+    "反垄断",
+    "数据安全",
+)
+
+DIRECT_COMPANY_ALIASES = {
+    "SK Hynix": ("SK Hynix", "SK海力士", "海力士"),
+    "NVIDIA": ("NVIDIA", "英伟达"),
+    "AMD": ("AMD", "超威"),
+    "Samsung": ("Samsung", "三星"),
+    "Micron": ("Micron", "美光"),
+    "Microsoft": ("Microsoft", "微软", "Azure"),
+    "Amazon": ("Amazon", "亚马逊"),
+    "AWS": ("AWS",),
+    "Google": ("Google", "Alphabet", "谷歌"),
+    "Meta": ("Meta",),
+    "Oracle": ("Oracle", "甲骨文"),
+    "CoreWeave": ("CoreWeave",),
+    "Anthropic": ("Anthropic",),
+    "OpenAI": ("OpenAI",),
+}
+
+INFERRED_COMPANIES_BY_LAYER = {
+    "半导体与硬件供应链": ("Samsung", "Micron", "NVIDIA", "AMD"),
+    "数据中心与电力": ("Vertiv", "Eaton", "Equinix", "Digital Realty"),
+    "AI Capex / 算力基础设施": ("Microsoft", "Amazon", "Google", "Oracle", "Meta"),
+}
+
 COMPANY_IMPACT_KEYWORDS = {
     "收入": ("revenue", "sales", "收入", "营收"),
     "毛利率": ("margin", "gross margin", "毛利率"),
@@ -351,9 +406,11 @@ def signal_matches(text: str) -> list[str]:
 
 def infer_industry_layer(text: str) -> str:
     title = text.split("\n", 1)[0]
-    if contains_any(text, INDUSTRY_LAYER_KEYWORDS["政策 / 监管 / 出口管制"]):
+    if contains_any(text, POLICY_ACTION_KEYWORDS):
         return "政策 / 监管 / 出口管制"
-    if contains_any(title, ("Blackwell", "HBM", "DRAM", "PCB", "芯片", "半导体", "SK Hynix", "NVIDIA", "AMD")):
+    if contains_any(text, ("HBM", "DRAM", "NAND", "ASIC", "PCB", "先进封装", "晶圆代工", "测试", "设备", "材料", "交付周期", "产能", "库存", "SK Hynix", "SK海力士")):
+        return "半导体与硬件供应链"
+    if contains_any(title, ("Blackwell", "芯片", "半导体", "NVIDIA", "AMD")):
         return "半导体与硬件供应链"
     if contains_any(text, INDUSTRY_LAYER_KEYWORDS["数据中心与电力"]):
         return "数据中心与电力"
@@ -378,6 +435,8 @@ def infer_company_impact_type(text: str) -> list[str]:
 
 def infer_signal_type(text: str, impacts: list[str], signals: list[str] | None = None) -> str:
     signals = signals or []
+    if contains_any(text, ("HBM", "DRAM")) and contains_any(text, ("capex", "capacity", "扩产", "放缓", "产能", "资本开支")):
+        return "存储供需 / HBM / DRAM / 资本开支"
     if "regulation_or_export_control" in signals or "监管风险" in impacts:
         return "监管 / 出口管制"
     if "capex" in signals or "资本开支" in impacts:
@@ -395,6 +454,36 @@ def infer_signal_type(text: str, impacts: list[str], signals: list[str] | None =
     return " / ".join(impacts[:2]) if impacts else "产业链信号"
 
 
+def direct_company_matches(text: str, company_matches: list[str] | None = None) -> list[str]:
+    direct: list[str] = []
+    lowered = text.lower()
+    for canonical, aliases in DIRECT_COMPANY_ALIASES.items():
+        if any(alias.lower() in lowered for alias in aliases):
+            direct.append(canonical)
+    for company in company_matches or []:
+        if company not in direct and company.lower() in lowered:
+            direct.append(company)
+    return direct[:8]
+
+
+def inferred_company_matches(layer: str, text: str, direct: list[str]) -> list[str]:
+    inferred = [company for company in INFERRED_COMPANIES_BY_LAYER.get(layer, ()) if company not in direct]
+    if layer == "半导体与硬件供应链" and contains_any(text, ("HBM", "DRAM", "NAND", "存储", "SK Hynix", "SK海力士")):
+        return inferred[:4]
+    if layer in {"数据中心与电力", "AI Capex / 算力基础设施"}:
+        return inferred[:4]
+    return []
+
+
+def watch_company_matches(layer: str, direct: list[str], inferred: list[str]) -> list[str]:
+    watched = []
+    if layer == "AI 模型公司与商业化":
+        watched = ["OpenAI", "Anthropic"]
+    elif layer == "机器人 / 具身智能":
+        watched = ["Tesla", "Unitree", "UBTECH"]
+    return [company for company in watched if company not in direct and company not in inferred][:4]
+
+
 def derive_report_fields(
     *,
     title: str,
@@ -405,16 +494,21 @@ def derive_report_fields(
     tracked_companies: dict[str, list[str]] | None = None,
 ) -> dict[str, object]:
     text = f"{title}\n{content}\n{url}"
-    companies = list(company_matches or [])
+    companies = direct_company_matches(text, company_matches)
     if not companies and tracked_companies:
-        companies = matched_companies(text, tracked_companies)
+        companies = direct_company_matches(text, matched_companies(text, tracked_companies))
     signals = list(signal_matches_ or signal_matches(text))
     layer = infer_industry_layer(text)
+    inferred_companies = inferred_company_matches(layer, text, companies)
+    watch_companies = watch_company_matches(layer, companies, inferred_companies)
     impacts = infer_company_impact_type(text)
     variables = list(WATCH_VARIABLES_BY_LAYER.get(layer, ("收入兑现", "订单变化", "成本变化")))[:4]
     return {
         "industry_layer": layer,
         "company_layer": companies[:8],
+        "direct_companies": companies[:8],
+        "inferred_companies": inferred_companies,
+        "watch_companies": watch_companies,
         "company_impact_type": impacts,
         "signal_type": infer_signal_type(text, impacts, signals),
         "watch_variables": variables,

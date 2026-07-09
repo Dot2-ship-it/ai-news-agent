@@ -3,20 +3,40 @@ from __future__ import annotations
 import os
 import smtplib
 import logging
+import re
+from datetime import datetime
 from email.message import EmailMessage
+from html import escape
 
-from .models import DailyDigest, NewsItem
+from .event_aggregator import DigestEvent, EventBundle, build_event_bundle, status_label
+from .models import DailyDigest, NewsItem, WatchItem
 
 logger = logging.getLogger(__name__)
+EMAIL_BODY_MAX_CHARS = 12000
+HTML_BODY_MAX_CHARS = 50000
 
 INDUSTRY_ORDER = [
     "AI Capex / 算力基础设施",
     "半导体与硬件供应链",
     "数据中心与电力",
     "AI 模型公司与商业化",
-    "AI 应用与软件",
     "机器人 / 具身智能",
+    "政策 / 监管 / 出口管制",
 ]
+
+OBSERVATION_BLOCKLIST = (
+    "semianalysis",
+    "core research",
+    "data product",
+    "data products",
+    "semianalysis-data-products",
+    "chipbook",
+    "events",
+    "semianalysis-events",
+    "join exclusive tech events",
+    "compliance policies",
+    "compliance polices",
+)
 
 VAGUE_REPLACEMENTS = {
     "值得关注": "后续需要跟踪",
@@ -28,141 +48,501 @@ VAGUE_REPLACEMENTS = {
 }
 
 
-def render_email_text(digest: DailyDigest) -> str:
-    lines: list[str] = [digest.subject, "", "抓取概览"]
-    overview = _overview_lines(digest.opening_summary)
+def render_email_subject(digest: DailyDigest, bundle: EventBundle | None = None) -> str:
+    bundle = bundle or build_event_bundle(digest)
+    base = digest.subject.split("｜")[0:2]
+    base_subject = "｜".join(base) if len(base) == 2 else digest.subject
+    keywords = []
+    for event in bundle.core_events[:3]:
+        keyword = _subject_keyword(event)
+        if keyword not in keywords:
+            keywords.append(keyword)
+    return f"{base_subject}｜{'、'.join(keywords[:3])}" if keywords else base_subject
+
+
+def render_email_text(digest: DailyDigest, source_stats: list[dict[str, object]] | None = None) -> str:
+    bundle = build_event_bundle(digest)
+    subject = render_email_subject(digest, bundle)
+    lines: list[str] = [subject, "", "抓取概览"]
+    overview = _overview_lines(digest.opening_summary, len(bundle.core_events), source_stats)
     lines.extend(overview)
 
-    if not digest.items:
+    lines.extend(["", _core_section_title(len(bundle.core_events))])
+    if not bundle.core_events:
         lines.extend(
             [
+                "指定来源暂未抓取到可进入主日报的高置信新增内容。",
                 "",
-                "一、今日核心信号 Top 5",
-                "指定来源暂未抓取到可用于生成日报的新内容。",
+                "二、主线变化",
+                "暂无可归纳的主线变化。",
                 "",
-                "二、产业链层次",
+                "三、产业链层次",
                 "暂无可展开的产业链信号。",
                 "",
-                "三、公司层次",
+                "四、公司层次",
                 "暂无公司映射。",
                 "",
-                "四、政策 / 监管 / 出口管制",
-                "暂无单独政策或监管信号。",
-                "",
                 "五、观察池",
-                "暂无进入观察池的弱信号。",
-            ]
-        )
-        return "\n".join(lines)
-
-    lines.extend(["", "一、今日核心信号 Top 5"])
-    for item in digest.items[:5]:
-        lines.extend(
-            [
+                *_render_watch_events(bundle.watch_events),
                 "",
-                f"- 【{item.importance}】{_clean(item.title)}",
-                f"  标签：{_industry_layer(item)}｜{_companies(item)}｜{item.signal_type or '产业链信号'}",
-                f"  判断：{_brief(item.important_meaning, 90)}",
+                "六、本周继续追踪",
+                "暂无明确追踪项。",
             ]
         )
+        return _enforce_body_length("\n".join(lines))
 
-    lines.extend(["", "二、产业链层次"])
-    industry_grouped: dict[str, list[NewsItem]] = {layer: [] for layer in INDUSTRY_ORDER}
-    extra_layers: dict[str, list[NewsItem]] = {}
-    for item in digest.items:
-        layer = _industry_layer(item)
-        if layer == "政策 / 监管 / 出口管制":
-            continue
-        if layer in industry_grouped:
-            industry_grouped[layer].append(item)
-        else:
-            extra_layers.setdefault(layer, []).append(item)
+    for event in bundle.core_events:
+        lines.extend(_render_core_event(event))
 
+    lines.extend(["", "二、主线变化"])
+    lines.extend(_render_theme_changes(bundle))
+
+    lines.extend(["", "三、产业链层次"])
+    industry_grouped: dict[str, list[DigestEvent]] = {layer: [] for layer in INDUSTRY_ORDER}
+    for event in bundle.core_events:
+        if event.industry_layer in industry_grouped:
+            industry_grouped[event.industry_layer].append(event)
     rendered_industry = False
-    for layer in [*INDUSTRY_ORDER, *extra_layers.keys()]:
-        items = industry_grouped.get(layer) or extra_layers.get(layer, [])
-        if not items:
+    for layer in INDUSTRY_ORDER:
+        events = industry_grouped.get(layer, [])[:3]
+        if not events:
             continue
         rendered_industry = True
         lines.extend(["", layer])
-        for item in items:
-            lines.extend(
-                [
-                    "",
-                    f"【{item.importance}】{_clean(item.title)}",
-                    _meta_line(item),
-                    f"核心事实：{_brief(item.core_fact, 120)}",
-                    f"投研含义：{_brief(item.important_meaning, 140)}",
-                    f"传导链条：{_clean(item.transmission_chain or '该事件会传导至相关公司的收入、成本和估值假设。')}",
-                    f"相关公司：{_companies(item)}",
-                    f"后续跟踪变量：{_watch_variables(item)}",
-                    f"链接：{item.url}",
-                ]
+        for event in events:
+            lines.append(
+                f"- 【{event.importance}】{_clean(event.title)}｜"
+                f"{status_label(event.signal_status)}｜证据 {event.evidence_level}｜"
+                f"{_join(event.direct_companies)}｜{_brief(event.investment_implication, 80)}"
             )
     if not rendered_industry:
         lines.extend(["", "暂无可展开的产业链信号。"])
 
-    lines.extend(["", "三、公司层次"])
-    company_rows = _company_rows(digest.items)
-    if company_rows:
-        lines.append("公司名称｜产业链位置｜相关事件｜投研影响｜后续跟踪变量")
-        lines.extend(company_rows)
+    lines.extend(["", "四、公司层次"])
+    company_cards = _company_event_cards(bundle.core_events)
+    if company_cards:
+        lines.extend(company_cards)
     else:
         lines.append("暂无公司映射。")
 
-    lines.extend(["", "四、政策 / 监管 / 出口管制"])
-    policy_items = [item for item in digest.items if _industry_layer(item) == "政策 / 监管 / 出口管制"]
-    if policy_items:
-        lines.append("事件｜涉及地区 / 监管主体｜影响环节｜相关公司｜投研影响｜后续变量")
-        for item in policy_items:
-            lines.append(
-                "｜".join(
-                    [
-                        _clean(item.title),
-                        "待确认",
-                        _industry_layer(item),
-                        _companies(item),
-                        _brief(item.important_meaning, 80),
-                        _watch_variables(item),
-                    ]
-                )
-            )
-    else:
-        lines.append("暂无单独政策或监管信号。")
-
     lines.extend(["", "五、观察池"])
-    selected_urls = {item.url for item in digest.items}
-    watchlist = [item for item in digest.watchlist if item.url not in selected_urls]
-    if watchlist:
-        lines.append("标题｜层次｜相关公司｜信号类型｜分数｜状态｜后续观察点｜链接")
-        for item in watchlist[:10]:
-            lines.append(
-                "｜".join(
-                    [
-                        _clean(item.title),
-                        item.industry_layer,
-                        "、".join(item.company_layer) if item.company_layer else "-",
-                        item.signal_type,
-                        str(item.score),
-                        item.status,
-                        "、".join(item.watch_variables[:3]) if item.watch_variables else "-",
-                        item.url,
-                    ]
-                )
-            )
-    else:
-        lines.append("暂无进入观察池的弱信号。")
-    return "\n".join(lines).strip()
+    lines.extend(_render_watch_events(bundle.watch_events))
+
+    lines.extend(["", "六、本周继续追踪"])
+    lines.extend(_render_weekly_follow_up(bundle))
+    return _enforce_body_length("\n".join(lines).strip())
 
 
-def _overview_lines(opening_summary: str) -> list[str]:
+def render_email_html(digest: DailyDigest, source_stats: list[dict[str, object]] | None = None) -> str:
+    bundle = build_event_bundle(digest)
+    subject = render_email_subject(digest, bundle)
+    overview = _overview_lines(digest.opening_summary, len(bundle.core_events), source_stats)
+    window_text = _strip_bullet(overview[0])
+    count_text = _strip_bullet(overview[1])
+    health_text = _strip_bullet(overview[2]) if len(overview) > 2 else "抓取健康度：暂无来源统计。"
+    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    retained = _extract_metric(count_text, r"通过投研过滤保留\s*(\d+)\s*篇")
+    source_count = len(source_stats or [])
+    high_priority = sum(1 for event in bundle.core_events if event.importance == "高")
+
+    html = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{escape(subject)}</title>
+  <style>
+    body {{ margin: 0; padding: 0; background-color: #F5F7FA; color: #1F2937; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; font-size: 14px; line-height: 1.75; }}
+    .wrap {{ max-width: 680px; margin: 0 auto; padding: 24px 14px; }}
+    .card {{ background-color: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 10px; padding: 18px; margin-bottom: 14px; }}
+    .title {{ font-size: 22px; font-weight: 700; line-height: 1.35; color: #1F2937; margin: 0 0 8px; }}
+    .section-title {{ font-size: 17px; font-weight: 700; color: #1E3A8A; margin: 0 0 12px; }}
+    .event-title {{ font-size: 15px; font-weight: 700; color: #1F2937; margin: 0 0 8px; }}
+    .muted {{ color: #6B7280; font-size: 12px; }}
+    .metric-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }}
+    .metric {{ border: 1px solid #E5E7EB; border-radius: 8px; padding: 10px; background-color: #F9FAFB; }}
+    .metric-value {{ font-size: 20px; font-weight: 700; color: #1E3A8A; }}
+    .metric-label {{ font-size: 12px; color: #6B7280; }}
+    .tag {{ display: inline-block; padding: 2px 8px; border-radius: 999px; background-color: #EFF6FF; color: #1E3A8A; font-size: 12px; margin-right: 6px; }}
+    .tag-soft {{ background-color: #F3F4F6; color: #6B7280; }}
+    .event-card {{ border: 1px solid #E5E7EB; border-radius: 10px; padding: 14px; margin-bottom: 12px; }}
+    .label {{ font-weight: 700; color: #1F2937; }}
+    a {{ color: #2563EB; text-decoration: none; }}
+    ul {{ margin: 6px 0 0 20px; padding: 0; }}
+    .compact-item {{ padding: 8px 0; border-top: 1px solid #E5E7EB; }}
+    .compact-item:first-child {{ border-top: 0; }}
+    .table-wrap {{ overflow-x: auto; }}
+    table {{ width: 100%; border-collapse: collapse; }}
+    th, td {{ text-align: left; border-bottom: 1px solid #E5E7EB; padding: 8px; vertical-align: top; }}
+    th {{ color: #6B7280; font-size: 12px; font-weight: 700; }}
+    td {{ font-size: 13px; }}
+    .watch {{ background-color: #F9FAFB; font-size: 13px; }}
+    .diagnostics {{ background-color: #F9FAFB; color: #6B7280; font-size: 12px; }}
+    @media (max-width: 520px) {{ .metric-grid {{ grid-template-columns: 1fr; }} .wrap {{ padding: 12px; }} .card {{ padding: 14px; }} }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1 class="title">{escape(subject)}</h1>
+      <div class="muted">{escape(window_text)}</div>
+      <div class="muted">生成时间：北京时间 {escape(generated_at)}｜有效事件数：{len(bundle.core_events)}</div>
+    </div>
+    <div class="card">
+      <h2 class="section-title">抓取概览</h2>
+      <div class="metric-grid">
+        {_metric_block("有效事件", str(len(bundle.core_events)))}
+        {_metric_block("保留文章", retained)}
+        {_metric_block("抓取来源", str(source_count))}
+        {_metric_block("高优先级", str(high_priority))}
+      </div>
+      <div class="muted" style="margin-top:10px;">{escape(count_text)}｜{escape(health_text)}</div>
+    </div>
+    {_html_core_events(bundle)}
+    {_html_theme_changes(bundle)}
+    {_html_industry_layers(bundle)}
+    {_html_company_table(bundle)}
+    {_html_watchlist(bundle)}
+    {_html_weekly_follow(bundle)}
+    {_html_diagnostics(source_stats)}
+  </div>
+</body>
+</html>"""
+    return _enforce_html_length(html)
+
+
+def _overview_lines(
+    opening_summary: str,
+    selected_count: int,
+    source_stats: list[dict[str, object]] | None = None,
+) -> list[str]:
     bullets = [line.strip().lstrip("- ").strip() for line in opening_summary.splitlines() if line.strip()]
     range_line = next((line for line in bullets if "本期抓取范围" in line), "本期抓取范围：北京时间过去 24 小时。")
     count_line = next(
         (line for line in bullets if "今日共抓取候选链接" in line),
         "今日共抓取候选链接 0 条，成功提取正文 0 篇，通过投研过滤保留 0 篇，最终精选 0 条进入日报。",
     )
-    return [f"- {_clean(range_line)}", f"- {_clean(count_line)}"]
+    count_line = re.sub(r"最终精选\s*\d+\s*条", f"最终精选 {selected_count} 条", count_line)
+    lines = [f"- {_clean(range_line)}", f"- {_clean(count_line)}"]
+    if source_stats is not None:
+        success = sum(1 for stat in source_stats if stat.get("status") == "success")
+        partial = sum(1 for stat in source_stats if stat.get("status") == "partial_success")
+        failed = sum(1 for stat in source_stats if stat.get("status") in {"fetch_failed", "body_unavailable"})
+        lines.append(f"- 抓取健康度：成功源 {success} 个，部分成功源 {partial} 个，失败源 {failed} 个。")
+    return lines
+
+
+def _html_core_events(bundle: EventBundle) -> str:
+    title = _core_section_title(len(bundle.core_events))
+    if not bundle.core_events:
+        return _section_card(title, "<p>指定来源暂未抓取到可进入主日报的高置信新增内容。</p>")
+    parts = []
+    for event in bundle.core_events[:3]:
+        variables = "".join(
+            f"<li>{escape(variable.name)}：{escape(variable.direction_to_watch)}，{escape(variable.why)}</li>"
+            for variable in event.follow_up_variables[:3]
+        )
+        parts.append(
+            f"""
+            <div class="event-card">
+              <div><span class="tag">{escape(event.importance)}</span><span class="tag tag-soft">{escape(status_label(event.signal_status))}</span></div>
+              <h3 class="event-title">{escape(_clean(event.title))}</h3>
+              <div class="muted">{escape(status_label(event.signal_status))}｜证据等级 {escape(event.evidence_level)}｜置信度 {escape(event.confidence_level)}｜{escape(event.industry_layer)}</div>
+              <p><span class="label">发生了什么：</span>{escape(_brief(event.fact, 120))}</p>
+              <p><span class="label">为什么重要：</span>{escape(_brief(event.investment_implication, 140))}</p>
+              <div><span class="label">后续看什么：</span><ul>{variables}</ul></div>
+              <p><a href="{escape(event.canonical_url, quote=True)}">查看原文</a></p>
+            </div>
+            """
+        )
+    return _section_card(title, "".join(parts))
+
+
+def _html_theme_changes(bundle: EventBundle) -> str:
+    if not bundle.theme_changes:
+        return _section_card("主线变化", "<p>暂无可归纳的主线变化。</p>")
+    items = []
+    for change in bundle.theme_changes:
+        weight = "高权重证据" if change.high_weight_count else "证据"
+        items.append(
+            f"""
+            <div class="compact-item">
+              <span class="tag">{escape(status_label(change.signal_status))}</span>
+              <strong>{escape(change.theme_name)}</strong>
+              <span class="muted">今日新增 {change.evidence_count} 条{escape(weight)}</span>
+            </div>
+            """
+        )
+    return _section_card("主线变化", "".join(items))
+
+
+def _html_industry_layers(bundle: EventBundle) -> str:
+    grouped: dict[str, list[DigestEvent]] = {layer: [] for layer in INDUSTRY_ORDER}
+    for event in bundle.core_events:
+        if event.industry_layer in grouped:
+            grouped[event.industry_layer].append(event)
+    parts = []
+    for layer in INDUSTRY_ORDER:
+        events = grouped.get(layer, [])[:3]
+        if not events:
+            continue
+        rows = []
+        for event in events:
+            rows.append(
+                f"""
+                <div class="compact-item">
+                  <strong>{escape(_clean(event.title))}</strong>
+                  <div>{escape(_brief(event.investment_implication, 90))}</div>
+                  <div><a href="{escape(event.canonical_url, quote=True)}">查看原文</a></div>
+                </div>
+                """
+            )
+        parts.append(f"<h3 class=\"event-title\">{escape(layer)}</h3>{''.join(rows)}")
+    return _section_card("产业链层次", "".join(parts) if parts else "<p>暂无可展开的产业链信号。</p>")
+
+
+def _html_company_table(bundle: EventBundle) -> str:
+    rows = []
+    seen: set[str] = set()
+    for event in bundle.core_events:
+        for company in event.direct_companies:
+            if company in seen:
+                continue
+            seen.add(company)
+            rows.append(
+                f"""
+                <tr>
+                  <td>{escape(company)}</td>
+                  <td>{escape(event.industry_layer)}</td>
+                  <td>{escape(_clean(event.title))}</td>
+                  <td>{escape(_format_variables(event))}</td>
+                </tr>
+                """
+            )
+            if len(seen) >= 8:
+                break
+    if not rows:
+        return _section_card("公司层次", "<p>暂无公司映射。</p>")
+    table = (
+        '<div class="table-wrap"><table><thead><tr>'
+        "<th>公司</th><th>产业链位置</th><th>相关事件</th><th>后续变量</th>"
+        "</tr></thead><tbody>"
+        + "".join(rows)
+        + "</tbody></table></div>"
+    )
+    return _section_card("公司层次", table)
+
+
+def _html_watchlist(bundle: EventBundle) -> str:
+    if not bundle.watch_events:
+        return _section_card("观察池", '<div class="watch">暂无进入观察池的弱信号。</div>')
+    rows = []
+    for event in bundle.watch_events[:8]:
+        companies = _join(event.direct_companies)
+        rows.append(
+            f"""
+            <div class="compact-item watch">
+              <strong>{escape(_clean(event.title))}</strong>
+              <div class="muted">{escape(event.source)}｜{escape(companies)}｜{escape(status_label(event.signal_status))}</div>
+              <a href="{escape(event.canonical_url, quote=True)}">查看原文</a>
+            </div>
+            """
+        )
+    return _section_card("观察池", "".join(rows))
+
+
+def _html_weekly_follow(bundle: EventBundle) -> str:
+    if not bundle.follow_up_events:
+        return _section_card("本周继续追踪", "<p>暂无明确追踪项。</p>")
+    rows = []
+    for idx, event in enumerate(bundle.follow_up_events[:5], start=1):
+        rows.append(
+            f"""
+            <div class="compact-item">
+              <strong>{idx}. {escape(_clean(event.title))}</strong>
+              <div class="muted">当前状态：{escape(status_label(event.signal_status))}</div>
+              <div>下一步看：{escape(_format_variables(event))}</div>
+            </div>
+            """
+        )
+    return _section_card("本周继续追踪", "".join(rows))
+
+
+def _html_diagnostics(source_stats: list[dict[str, object]] | None) -> str:
+    source_stats = source_stats or []
+    success = [str(stat.get("source_name") or stat.get("source")) for stat in source_stats if stat.get("status") == "success"]
+    partial = [
+        str(stat.get("source_name") or stat.get("source"))
+        for stat in source_stats
+        if stat.get("status") == "partial_success"
+    ]
+    failed = [
+        str(stat.get("source_name") or stat.get("source"))
+        for stat in source_stats
+        if stat.get("status") in {"fetch_failed", "body_unavailable"}
+    ]
+    body = (
+        f"<div class=\"diagnostics\">"
+        f"<div><strong>成功源：</strong>{escape(_join(success))}</div>"
+        f"<div><strong>部分成功源：</strong>{escape(_join(partial))}</div>"
+        f"<div><strong>失败源：</strong>{escape(_join(failed))}</div>"
+        f"</div>"
+    )
+    return _section_card("抓取诊断", body)
+
+
+def _section_card(title: str, body: str) -> str:
+    return f'<div class="card"><h2 class="section-title">{escape(title)}</h2>{body}</div>'
+
+
+def _metric_block(label: str, value: str) -> str:
+    return (
+        f'<div class="metric"><div class="metric-value">{escape(value)}</div>'
+        f'<div class="metric-label">{escape(label)}</div></div>'
+    )
+
+
+def _strip_bullet(text: str) -> str:
+    return text.strip().lstrip("- ").strip()
+
+
+def _extract_metric(text: str, pattern: str) -> str:
+    match = re.search(pattern, text)
+    return match.group(1) if match else "-"
+
+
+def _core_section_title(count: int) -> str:
+    return "一、今日暂无高置信投研信号" if count == 0 else f"一、今日核心信号 Top {count}"
+
+
+def _render_core_event(event: DigestEvent) -> list[str]:
+    lines = [
+        "",
+        f"【{event.importance}】{_clean(event.title)}",
+        f"信号状态：{status_label(event.signal_status)}",
+        f"证据等级：{event.evidence_level}",
+        f"置信度：{event.confidence_level}",
+        f"发生了什么：{_brief(event.fact, 120)}",
+        f"为什么重要：{_brief(event.investment_implication, 140)}",
+        f"传导链条：{_clean(event.transmission_chain)}",
+        f"直接相关公司：{_join(event.direct_companies)}",
+        f"间接传导公司：{_join([company + '（间接传导）' for company in event.peer_companies])}",
+        "后续看什么：",
+    ]
+    for variable in event.follow_up_variables[:3]:
+        lines.append(f"- {variable.name}：{variable.direction_to_watch}，{variable.why}")
+    if event.confidence_level == "低":
+        lines.append("备注：低置信度，待确认。")
+    lines.append(f"链接：{event.canonical_url}")
+    return lines
+
+
+def _render_theme_changes(bundle: EventBundle) -> list[str]:
+    if not bundle.theme_changes:
+        return ["暂无可归纳的主线变化。"]
+    lines = []
+    for change in bundle.theme_changes:
+        weight = "高权重证据" if change.high_weight_count else "证据"
+        lines.append(
+            f"- {change.theme_name}：{status_label(change.signal_status)}，"
+            f"今日新增 {change.evidence_count} 条{weight}"
+        )
+    return lines
+
+
+def _company_event_cards(events: list[DigestEvent]) -> list[str]:
+    cards: list[str] = []
+    seen: set[str] = set()
+    for event in events:
+        for company in event.direct_companies:
+            if company in seen:
+                continue
+            seen.add(company)
+            cards.extend(
+                [
+                    "",
+                    f"公司：{company}",
+                    f"事件：{_clean(event.title)}",
+                    f"影响方向：{event.signal_type}",
+                    f"影响路径：{_clean(event.transmission_chain)}",
+                    f"后续跟踪变量：{_format_variables(event)}",
+                ]
+            )
+            if len(seen) >= 8:
+                return cards
+    return cards
+
+
+def _render_watch_events(events: list[DigestEvent]) -> list[str]:
+    if not events:
+        return ["暂无进入观察池的弱信号。"]
+    lines: list[str] = []
+    for event in events[:8]:
+        lines.extend(
+            [
+                "",
+                f"事件：{_clean(event.title)}",
+                f"层次：{event.industry_layer}",
+                f"信号状态：{status_label(event.signal_status)}",
+                f"证据等级：{event.evidence_level}",
+                f"置信度：{event.confidence_level}",
+                f"后续观察点：{_format_variables(event)}",
+                f"链接：{event.canonical_url}",
+            ]
+        )
+    return lines
+
+
+def _render_weekly_follow_up(bundle: EventBundle) -> list[str]:
+    if not bundle.follow_up_events:
+        return ["暂无明确追踪项。"]
+    lines: list[str] = []
+    for idx, event in enumerate(bundle.follow_up_events[:5], start=1):
+        lines.extend(
+            [
+                f"{idx}. {_clean(event.title)}",
+                f"   - 当前状态：{status_label(event.signal_status)}",
+                f"   - 下一步看：{_format_variables(event)}",
+            ]
+        )
+    return lines
+
+
+def _subject_keyword(event: DigestEvent) -> str:
+    text = f"{event.title} {event.signal_type} {event.industry_layer}"
+    if any(keyword in text for keyword in ("估值", "股价", "重定价", "回落")):
+        return "AI估值"
+    if any(keyword in text for keyword in ("HBM", "DRAM", "存储")):
+        return "HBM供需"
+    if any(keyword in text for keyword in ("国产", "推理芯片", "芯片替代")):
+        return "国产芯片"
+    if any(keyword in text for keyword in ("数据中心", "电力", "MW", "GW")):
+        return "数据中心电力"
+    if any(keyword in text for keyword in ("出口", "监管", "制裁")):
+        return "出口管制"
+    if any(keyword in text for keyword in ("capex", "资本开支", "ROI")):
+        return "AI capex"
+    return event.industry_layer.split(" / ")[0][:8]
+
+
+def _format_variables(event: DigestEvent) -> str:
+    return "、".join(variable.name for variable in event.follow_up_variables[:3]) or "后续官方披露"
+
+
+def _join(values: list[str]) -> str:
+    return "、".join(values[:6]) if values else "-"
+
+
+def _enforce_body_length(body: str) -> str:
+    if len(body) <= EMAIL_BODY_MAX_CHARS:
+        return body
+    return body[: EMAIL_BODY_MAX_CHARS - 40].rstrip() + "\n\n[正文已按长度上限截断，详细链接请见原文。]"
+
+
+def _enforce_html_length(body: str) -> str:
+    if len(body) <= HTML_BODY_MAX_CHARS:
+        return body
+    return body[: HTML_BODY_MAX_CHARS - 80].rstrip() + "<p>正文已按长度上限截断，详细链接请见原文。</p></div></body></html>"
 
 
 def _industry_layer(item: NewsItem) -> str:
@@ -181,6 +561,17 @@ def _companies(item: NewsItem) -> str:
     return "、".join(item.company_layer[:6]) if item.company_layer else "-"
 
 
+def _direct_companies(item: NewsItem) -> str:
+    companies = item.direct_companies or item.company_layer
+    return "、".join(companies[:6]) if companies else "-"
+
+
+def _inferred_companies(item: NewsItem) -> str:
+    if not item.inferred_companies:
+        return "-"
+    return "、".join(f"{company}（间接传导）" for company in item.inferred_companies[:6])
+
+
 def _watch_variables(item: NewsItem) -> str:
     return "、".join(item.watch_variables[:4]) if item.watch_variables else "订单变化、收入兑现、成本变化"
 
@@ -194,28 +585,92 @@ def _meta_line(item: NewsItem) -> str:
     return f"{item.source}｜{published}｜{discovery}｜{status}"
 
 
-def _company_rows(items: list[NewsItem]) -> list[str]:
-    rows: list[str] = []
+def _company_cards(items: list[NewsItem]) -> list[str]:
+    cards: list[str] = []
     seen: set[tuple[str, str]] = set()
     for item in items:
-        for company in item.company_layer[:6]:
+        for company in (item.direct_companies or item.company_layer)[:6]:
             key = (company, item.title)
             if key in seen:
                 continue
             seen.add(key)
             impacts = "、".join(item.company_impact_type[:3]) if item.company_impact_type else "收入、成本或估值假设"
-            rows.append(
-                "｜".join(
-                    [
-                        company,
-                        _industry_layer(item),
-                        _clean(item.title),
-                        f"影响{impacts}",
-                        _watch_variables(item),
-                    ]
-                )
+            cards.extend(
+                [
+                    "",
+                    f"公司：{company}",
+                    f"事件：{_clean(item.title)}",
+                    f"影响方向：影响{impacts}",
+                    f"影响路径：{_clean(item.transmission_chain or '该事件会传导至相关公司的收入、成本和估值假设。')}",
+                    f"后续跟踪变量：{_watch_variables(item)}",
+                ]
             )
-    return rows[:15]
+    return cards[:60]
+
+
+def _render_watchlist(watchlist: list[WatchItem], selected_urls: set[str]) -> list[str]:
+    items = [item for item in watchlist if item.url not in selected_urls and _is_watchlist_item_readable(item)]
+    if not items:
+        return ["暂无进入观察池的弱信号。"]
+    lines: list[str] = []
+    for item in items[:5]:
+        companies = item.direct_companies or item.company_layer
+        inferred = "、".join(f"{company}（间接传导）" for company in item.inferred_companies[:4]) or "-"
+        lines.extend(
+            [
+                "",
+                f"事件：{_clean(item.title)}",
+                f"层次：{item.industry_layer}",
+                f"直接相关公司：{'、'.join(companies[:4]) if companies else '-'}",
+                f"间接传导公司：{inferred}",
+                f"信号类型：{item.signal_type}",
+                f"状态：{item.status}",
+                f"后续观察点：{'、'.join(item.watch_variables[:3]) if item.watch_variables else '-'}",
+                f"链接：{item.url}",
+            ]
+        )
+    return lines
+
+
+def _is_core_signal_item(item: NewsItem) -> bool:
+    content_status = item.content_status or ""
+    body_available = not item.is_partial and not any(marker in content_status for marker in ("正文不可用", "仅基于", "订阅限制"))
+    if item.time_status in {"time_unknown", "unknown"} and (item.discovery_method == "list_page" or not body_available):
+        return False
+    return True
+
+
+def _is_watchlist_item_readable(item: WatchItem) -> bool:
+    title = item.title.strip().lower()
+    url = item.url.lower().rstrip("/")
+    if not title or title in {
+        "semianalysis",
+        "core research",
+        "data product",
+        "data products",
+        "chipbook",
+        "events",
+        "compliance policies",
+        "compliance polices",
+    }:
+        return False
+    if any(keyword in f"{title} {url}" for keyword in OBSERVATION_BLOCKLIST):
+        return False
+    if url.endswith(("semianalysis.com", "semianalysis.com/")):
+        return False
+    if "time_unknown" in item.status and item.discovery_method == "list_page":
+        return False
+    return True
+
+
+def _suggested_action(item: NewsItem) -> str:
+    if item.is_partial or item.time_status in {"time_unknown", "unknown"}:
+        return "需人工复核"
+    if item.importance == "高":
+        return "跟踪"
+    if item.importance == "中":
+        return "加入观察池"
+    return "暂不处理"
 
 
 def _brief(text: str, max_chars: int) -> str:
@@ -236,7 +691,7 @@ def _clean(text: str) -> str:
     return cleaned.replace("...", "").replace("…", "").strip()
 
 
-def send_email(subject: str, body: str) -> None:
+def send_email(subject: str, body: str, html_body: str | None = None) -> None:
     required = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "EMAIL_FROM", "EMAIL_TO"]
     missing = [key for key in required if not os.getenv(key)]
     if missing:
@@ -247,6 +702,8 @@ def send_email(subject: str, body: str) -> None:
     message["From"] = os.environ["EMAIL_FROM"]
     message["To"] = os.environ["EMAIL_TO"]
     message.set_content(body, subtype="plain", charset="utf-8")
+    if html_body:
+        message.add_alternative(html_body, subtype="html", charset="utf-8")
 
     host = os.environ["SMTP_HOST"]
     port = int(os.environ["SMTP_PORT"])

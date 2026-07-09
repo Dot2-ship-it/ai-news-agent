@@ -126,6 +126,9 @@ class NewsItem(BaseModel):
     is_partial: bool = False
     industry_layer: str | None = None
     company_layer: list[str] = Field(default_factory=list)
+    direct_companies: list[str] = Field(default_factory=list)
+    inferred_companies: list[str] = Field(default_factory=list)
+    watch_companies: list[str] = Field(default_factory=list)
     company_impact_type: list[str] = Field(default_factory=list)
     signal_type: str | None = None
     watch_variables: list[str] = Field(default_factory=list)
@@ -138,6 +141,9 @@ class WatchItem(BaseModel):
     source: str
     industry_layer: str
     company_layer: list[str] = Field(default_factory=list)
+    direct_companies: list[str] = Field(default_factory=list)
+    inferred_companies: list[str] = Field(default_factory=list)
+    watch_companies: list[str] = Field(default_factory=list)
     signal_type: str
     score: int
     status: str

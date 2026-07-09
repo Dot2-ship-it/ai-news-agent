@@ -1,52 +1,70 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
+from dataclasses import asdict
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
 from src.crawler import NewsCrawler
-from src.emailer import render_email_text, send_email
-from src.models import Article
+from src.emailer import render_email_html, render_email_subject, render_email_text, send_email
+from src.event_aggregator import build_event_bundle
+from src.models import Article, DailyDigest
 from src.storage import SeenStore
 from src.summarizer import NewsSummarizer
 from src.translator import OpenAITranslator
 from src.utils import load_config, setup_logging
 
 logger = logging.getLogger(__name__)
+ARTIFACTS_DIR = Path("artifacts")
 
 
 def render_diagnostics_text(source_stats: list[dict[str, object]]) -> str:
-    lines = ["", "六、抓取诊断"]
+    success_sources = [
+        str(stat.get("source_name") or stat.get("source"))
+        for stat in source_stats
+        if stat.get("status") == "success"
+    ]
+    partial_sources = [
+        str(stat.get("source_name") or stat.get("source"))
+        for stat in source_stats
+        if stat.get("status") == "partial_success"
+    ]
+    failed_sources = [
+        str(stat.get("source_name") or stat.get("source"))
+        for stat in source_stats
+        if stat.get("status") in {"fetch_failed", "body_unavailable"}
+    ]
+    failure_reasons: dict[str, int] = {}
     for stat in source_stats:
-        lines.append(
-            (
-                f"- {stat.get('source_name') or stat.get('source')} "
-                f"({stat.get('source_type')}): "
-                f"discovered={stat.get('discovered_count')}, "
-                f"discovery_methods={stat.get('discovery_methods')}, "
-                f"fetched={stat.get('fetched_count')}, "
-                f"kept={stat.get('kept_count')}, "
-                f"partial={stat.get('partial_count')}, "
-                f"filtered_by_time={stat.get('filtered_by_time_count')}, "
-                f"filtered_by_relevance={stat.get('filtered_by_relevance_count')}, "
-                f"body_failed={stat.get('body_failed_count')}, "
-                f"discovery_failed={stat.get('discovery_failed_count')}, "
-                f"gdelt_fallback={stat.get('gdelt_fallback_count')}, "
-                f"gdelt_status={stat.get('gdelt_status')}, "
-                f"gdelt_error={stat.get('gdelt_error_message') or ''}, "
-                f"premium_limited={stat.get('premium_limited_count')}, "
-                f"list_page_only={stat.get('list_page_only_count')}, "
-                f"filtered_by_url={stat.get('filtered_by_url_count')}, "
-                f"failed={stat.get('failed_count')}, "
-                f"status={stat.get('status')}, "
-                f"error={stat.get('error_message') or ''}"
-            )
-        )
+        reason = str(stat.get("error_type") or stat.get("status") or "unknown")
+        if stat.get("gdelt_status") == "rate_limited":
+            reason = "gdelt_rate_limited"
+        if stat.get("status") in {"fetch_failed", "partial_success", "body_unavailable"}:
+            failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+    main_reasons = sorted(failure_reasons.items(), key=lambda item: (-item[1], item[0]))[:3]
+    lines = [
+        "",
+        "七、抓取诊断",
+        f"- 成功源：{_join_source_names(success_sources)}",
+        f"- 部分成功源：{_join_source_names(partial_sources)}",
+        f"- 失败源：{_join_source_names(failed_sources)}",
+        f"- 主要失败原因：{', '.join(f'{reason}({count})' for reason, count in main_reasons) if main_reasons else '无明显失败聚类'}",
+    ]
     return "\n".join(lines)
+
+
+def _join_source_names(names: list[str]) -> str:
+    if not names:
+        return "无"
+    if len(names) <= 6:
+        return "、".join(names)
+    return "、".join(names[:6]) + f" 等 {len(names)} 个"
 
 
 def parse_args() -> argparse.Namespace:
@@ -62,13 +80,54 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-cache", action="store_true", help="Do not use or update seen article cache")
     parser.add_argument("--max-items", type=int, default=5, help="Maximum number of news items in the digest")
     parser.add_argument("--max-per-source", type=int, default=2, help="Maximum selected items per source")
+    parser.add_argument("--preview-email", action="store_true", help="Render a local sample email without fetching or sending")
     return parser.parse_args()
+
+
+def render_preview_email() -> str:
+    fixture_path = Path("tests/fixtures/sample_digest_events.json")
+    data = json.loads(fixture_path.read_text(encoding="utf-8"))
+    digest = DailyDigest.model_validate(data["digest"])
+    source_stats = data.get("source_stats", [])
+    body = f"{render_email_text(digest, source_stats=source_stats)}\n{render_diagnostics_text(source_stats)}"
+    html_body = render_email_html(digest, source_stats=source_stats)
+    write_artifacts(body, html_body, digest, source_stats)
+    return body
+
+
+def write_artifacts(
+    body: str,
+    html_body: str,
+    digest: DailyDigest,
+    source_stats: list[dict[str, object]],
+) -> dict[str, str]:
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    preview_path = ARTIFACTS_DIR / "preview_email.txt"
+    html_preview_path = ARTIFACTS_DIR / "preview_email.html"
+    diagnostics_path = ARTIFACTS_DIR / "crawl_diagnostics.json"
+    events_path = ARTIFACTS_DIR / "digest_events.json"
+    preview_path.write_text(body, encoding="utf-8")
+    html_preview_path.write_text(html_body, encoding="utf-8")
+    diagnostics_path.write_text(json.dumps(source_stats, ensure_ascii=False, indent=2), encoding="utf-8")
+    events_path.write_text(
+        json.dumps(asdict(build_event_bundle(digest)), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return {
+        "preview_email": str(preview_path),
+        "preview_email_html": str(html_preview_path),
+        "crawl_diagnostics": str(diagnostics_path),
+        "digest_events": str(events_path),
+    }
 
 
 def main() -> None:
     load_dotenv()
     setup_logging()
     args = parse_args()
+    if args.preview_email:
+        print(render_preview_email())
+        return
     tz = ZoneInfo("Asia/Shanghai")
     now = datetime.now(tz)
     today = now.strftime("%Y-%m-%d")
@@ -191,14 +250,17 @@ def main() -> None:
         )
     else:
         digest = NewsSummarizer.build_empty_digest(today, run_stats)
-    body = render_email_text(digest)
+    subject = render_email_subject(digest)
+    body = render_email_text(digest, source_stats=source_stats)
     body = f"{body}\n{render_diagnostics_text(source_stats)}"
+    html_body = render_email_html(digest, source_stats=source_stats)
+    write_artifacts(body, html_body, digest, source_stats)
 
     if args.dry_run:
         print(body)
     else:
-        send_email(digest.subject, body)
-        logger.info("Email sent: %s", digest.subject)
+        send_email(subject, body, html_body=html_body)
+        logger.info("Email sent: %s", subject)
 
     if store and all_articles and not args.dry_run:
         store.add_articles(all_articles)
