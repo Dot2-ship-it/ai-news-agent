@@ -63,9 +63,8 @@ def render_email_subject(digest: DailyDigest, bundle: EventBundle | None = None)
 def render_email_text(digest: DailyDigest, source_stats: list[dict[str, object]] | None = None) -> str:
     bundle = build_event_bundle(digest)
     subject = render_email_subject(digest, bundle)
-    lines: list[str] = [subject, "", "抓取概览"]
-    overview = _overview_lines(digest.opening_summary, len(bundle.core_events), source_stats)
-    lines.extend(overview)
+    lines: list[str] = [subject, "", "今日摘要"]
+    lines.extend(_summary_lines(bundle))
 
     lines.extend(["", _core_section_title(len(bundle.core_events))])
     if not bundle.core_events:
@@ -73,77 +72,30 @@ def render_email_text(digest: DailyDigest, source_stats: list[dict[str, object]]
             [
                 "指定来源暂未抓取到可进入主日报的高置信新增内容。",
                 "",
-                "二、主线变化",
+                "主线变化",
                 "暂无可归纳的主线变化。",
                 "",
-                "三、产业链层次",
-                "暂无可展开的产业链信号。",
-                "",
-                "四、公司层次",
-                "暂无公司映射。",
-                "",
-                "五、观察池",
+                "观察池",
                 *_render_watch_events(bundle.watch_events),
-                "",
-                "六、本周继续追踪",
-                "暂无明确追踪项。",
             ]
         )
         return _enforce_body_length("\n".join(lines))
 
     for event in bundle.core_events:
-        lines.extend(_render_core_event(event))
+        lines.extend(_render_core_event(event, bundle))
 
-    lines.extend(["", "二、主线变化"])
+    lines.extend(["", "主线变化"])
     lines.extend(_render_theme_changes(bundle))
 
-    lines.extend(["", "三、产业链层次"])
-    industry_grouped: dict[str, list[DigestEvent]] = {layer: [] for layer in INDUSTRY_ORDER}
-    for event in bundle.core_events:
-        if event.industry_layer in industry_grouped:
-            industry_grouped[event.industry_layer].append(event)
-    rendered_industry = False
-    for layer in INDUSTRY_ORDER:
-        events = industry_grouped.get(layer, [])[:3]
-        if not events:
-            continue
-        rendered_industry = True
-        lines.extend(["", layer])
-        for event in events:
-            lines.append(
-                f"- 【{event.importance}】{_clean(event.title)}｜"
-                f"{status_label(event.signal_status)}｜证据 {event.evidence_level}｜"
-                f"{_join(event.direct_companies)}｜{_brief(event.investment_implication, 80)}"
-            )
-    if not rendered_industry:
-        lines.extend(["", "暂无可展开的产业链信号。"])
-
-    lines.extend(["", "四、公司层次"])
-    company_cards = _company_event_cards(bundle.core_events)
-    if company_cards:
-        lines.extend(company_cards)
-    else:
-        lines.append("暂无公司映射。")
-
-    lines.extend(["", "五、观察池"])
+    lines.extend(["", "观察池"])
     lines.extend(_render_watch_events(bundle.watch_events))
-
-    lines.extend(["", "六、本周继续追踪"])
-    lines.extend(_render_weekly_follow_up(bundle))
     return _enforce_body_length("\n".join(lines).strip())
 
 
 def render_email_html(digest: DailyDigest, source_stats: list[dict[str, object]] | None = None) -> str:
     bundle = build_event_bundle(digest)
     subject = render_email_subject(digest, bundle)
-    overview = _overview_lines(digest.opening_summary, len(bundle.core_events), source_stats)
-    window_text = _strip_bullet(overview[0])
-    count_text = _strip_bullet(overview[1])
-    health_text = _strip_bullet(overview[2]) if len(overview) > 2 else "抓取健康度：暂无来源统计。"
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
-    retained = _extract_metric(count_text, r"通过投研过滤保留\s*(\d+)\s*篇")
-    source_count = len(source_stats or [])
-    high_priority = sum(1 for event in bundle.core_events if event.importance == "高")
 
     html = f"""<!doctype html>
 <html lang="zh-CN">
@@ -185,25 +137,12 @@ def render_email_html(digest: DailyDigest, source_stats: list[dict[str, object]]
   <div class="wrap">
     <div class="card">
       <h1 class="title">{escape(subject)}</h1>
-      <div class="muted">{escape(window_text)}</div>
       <div class="muted">生成时间：北京时间 {escape(generated_at)}｜有效事件数：{len(bundle.core_events)}</div>
     </div>
-    <div class="card">
-      <h2 class="section-title">抓取概览</h2>
-      <div class="metric-grid">
-        {_metric_block("有效事件", str(len(bundle.core_events)))}
-        {_metric_block("保留文章", retained)}
-        {_metric_block("抓取来源", str(source_count))}
-        {_metric_block("高优先级", str(high_priority))}
-      </div>
-      <div class="muted" style="margin-top:10px;">{escape(count_text)}｜{escape(health_text)}</div>
-    </div>
+    {_html_summary(bundle)}
     {_html_core_events(bundle)}
     {_html_theme_changes(bundle)}
-    {_html_industry_layers(bundle)}
-    {_html_company_table(bundle)}
     {_html_watchlist(bundle)}
-    {_html_weekly_follow(bundle)}
     {_html_diagnostics(source_stats)}
   </div>
 </body>
@@ -232,6 +171,22 @@ def _overview_lines(
     return lines
 
 
+def _summary_lines(bundle: EventBundle) -> list[str]:
+    strongest = bundle.theme_changes[0].theme_name if bundle.theme_changes else "暂无明确主线"
+    variables = _dedup_variables(bundle.core_events)[:2]
+    watch_count = len(bundle.watch_events)
+    return [
+        f"- 主线最强：{strongest}。",
+        f"- 需要验证：{'、'.join(variables) if variables else '后续官方披露'}。",
+        f"- 待验证信息：观察池 {watch_count} 条，低置信内容不进核心信号。",
+    ]
+
+
+def _html_summary(bundle: EventBundle) -> str:
+    body = "".join(f"<div>{escape(line)}</div>" for line in _summary_lines(bundle))
+    return _section_card("今日摘要", body)
+
+
 def _html_core_events(bundle: EventBundle) -> str:
     title = _core_section_title(len(bundle.core_events))
     if not bundle.core_events:
@@ -247,10 +202,12 @@ def _html_core_events(bundle: EventBundle) -> str:
             <div class="event-card">
               <div><span class="tag">{escape(event.importance)}</span><span class="tag tag-soft">{escape(status_label(event.signal_status))}</span></div>
               <h3 class="event-title">{escape(_clean(event.title))}</h3>
-              <div class="muted">{escape(status_label(event.signal_status))}｜证据等级 {escape(event.evidence_level)}｜置信度 {escape(event.confidence_level)}｜{escape(event.industry_layer)}</div>
-              <p><span class="label">发生了什么：</span>{escape(_brief(event.fact, 120))}</p>
-              <p><span class="label">为什么重要：</span>{escape(_brief(event.investment_implication, 140))}</p>
-              <div><span class="label">后续看什么：</span><ul>{variables}</ul></div>
+              <div class="muted">{escape(event.industry_layer)}｜{escape(_theme_labels(event, bundle))}｜证据 {escape(event.evidence_level)}｜置信度 {escape(event.confidence_level)}</div>
+              <p><span class="label">事实摘要：</span>{escape(_brief(event.fact, 120))}</p>
+              <p><span class="label">增量判断：</span>{escape(_incremental_judgment(event))}</p>
+              <p><span class="label">投研含义：</span>{escape(_brief(event.investment_implication, 140))}</p>
+              <p><span class="label">影响公司：</span>{escape(_impact_companies(event))}</p>
+              <div><span class="label">下一步验证：</span><ul>{variables}</ul></div>
               <p><a href="{escape(event.canonical_url, quote=True)}">查看原文</a></p>
             </div>
             """
@@ -263,13 +220,14 @@ def _html_theme_changes(bundle: EventBundle) -> str:
         return _section_card("主线变化", "<p>暂无可归纳的主线变化。</p>")
     items = []
     for change in bundle.theme_changes:
-        weight = "高权重证据" if change.high_weight_count else "证据"
+        events = _events_for_theme(bundle, change.theme_id)
         items.append(
             f"""
             <div class="compact-item">
-              <span class="tag">{escape(status_label(change.signal_status))}</span>
-              <strong>{escape(change.theme_name)}</strong>
-              <span class="muted">今日新增 {change.evidence_count} 条{escape(weight)}</span>
+              <div><span class="tag">{escape(status_label(change.signal_status))}</span><strong>{escape(change.theme_name)}</strong></div>
+              <div class="muted">今日增量：新增 {change.evidence_count} 条证据｜证据质量：{escape(_theme_evidence_quality(change))}</div>
+              <div>投资含义：{escape(_theme_implication(change.theme_name))}</div>
+              <div>下一步验证：{escape('、'.join(_dedup_variables(events)[:3]) or '后续官方披露')}</div>
             </div>
             """
         )
@@ -412,22 +370,20 @@ def _extract_metric(text: str, pattern: str) -> str:
 
 
 def _core_section_title(count: int) -> str:
-    return "一、今日暂无高置信投研信号" if count == 0 else f"一、今日核心信号 Top {count}"
+    return "今日暂无高置信投研信号" if count == 0 else f"核心信号 Top {count}"
 
 
-def _render_core_event(event: DigestEvent) -> list[str]:
+def _render_core_event(event: DigestEvent, bundle: EventBundle) -> list[str]:
     lines = [
         "",
-        f"【{event.importance}】{_clean(event.title)}",
-        f"信号状态：{status_label(event.signal_status)}",
-        f"证据等级：{event.evidence_level}",
-        f"置信度：{event.confidence_level}",
-        f"发生了什么：{_brief(event.fact, 120)}",
-        f"为什么重要：{_brief(event.investment_implication, 140)}",
-        f"传导链条：{_clean(event.transmission_chain)}",
-        f"直接相关公司：{_join(event.direct_companies)}",
-        f"间接传导公司：{_join([company + '（间接传导）' for company in event.peer_companies])}",
-        "后续看什么：",
+        f"事件标题：{_clean(event.title)}",
+        f"产业链标签：{event.industry_layer}",
+        f"主线标签：{_theme_labels(event, bundle)}",
+        f"事实摘要：{_brief(event.fact, 120)}",
+        f"增量判断：{_incremental_judgment(event)}",
+        f"投研含义：{_brief(event.investment_implication, 140)}",
+        f"影响公司：{_impact_companies(event)}",
+        "下一步验证：",
     ]
     for variable in event.follow_up_variables[:3]:
         lines.append(f"- {variable.name}：{variable.direction_to_watch}，{variable.why}")
@@ -442,10 +398,16 @@ def _render_theme_changes(bundle: EventBundle) -> list[str]:
         return ["暂无可归纳的主线变化。"]
     lines = []
     for change in bundle.theme_changes:
-        weight = "高权重证据" if change.high_weight_count else "证据"
-        lines.append(
-            f"- {change.theme_name}：{status_label(change.signal_status)}，"
-            f"今日新增 {change.evidence_count} 条{weight}"
+        events = _events_for_theme(bundle, change.theme_id)
+        lines.extend(
+            [
+                f"- 主线：{change.theme_name}",
+                f"  状态：{status_label(change.signal_status)}",
+                f"  今日增量：新增 {change.evidence_count} 条证据",
+                f"  证据质量：{_theme_evidence_quality(change)}",
+                f"  投资含义：{_theme_implication(change.theme_name)}",
+                f"  下一步验证：{'、'.join(_dedup_variables(events)[:3]) or '后续官方披露'}",
+            ]
         )
     return lines
 
@@ -527,6 +489,58 @@ def _subject_keyword(event: DigestEvent) -> str:
 
 def _format_variables(event: DigestEvent) -> str:
     return "、".join(variable.name for variable in event.follow_up_variables[:3]) or "后续官方披露"
+
+
+def _theme_labels(event: DigestEvent, bundle: EventBundle) -> str:
+    theme_names = []
+    for theme_id in event.theme_ids:
+        change = next((item for item in bundle.theme_changes if item.theme_id == theme_id), None)
+        if change and change.theme_name not in theme_names:
+            theme_names.append(change.theme_name)
+    return "、".join(theme_names[:2]) if theme_names else "未归类主线"
+
+
+def _incremental_judgment(event: DigestEvent) -> str:
+    return f"{status_label(event.signal_status)}，证据等级 {event.evidence_level}，置信度 {event.confidence_level}。"
+
+
+def _impact_companies(event: DigestEvent) -> str:
+    direct = _join(event.direct_companies)
+    peers = _join([company + "（间接传导）" for company in event.peer_companies])
+    return f"直接：{direct}；间接：{peers}"
+
+
+def _events_for_theme(bundle: EventBundle, theme_id: str) -> list[DigestEvent]:
+    return [event for event in [*bundle.core_events, *bundle.watch_events] if theme_id in event.theme_ids]
+
+
+def _dedup_variables(events: list[DigestEvent]) -> list[str]:
+    variables: list[str] = []
+    for event in events:
+        for variable in event.follow_up_variables:
+            if variable.name not in variables:
+                variables.append(variable.name)
+    return variables
+
+
+def _theme_evidence_quality(change) -> str:
+    if change.high_weight_count:
+        return f"{change.high_weight_count} 条高权重证据"
+    return "待交叉验证"
+
+
+def _theme_implication(theme_name: str) -> str:
+    if "HBM" in theme_name or "存储" in theme_name:
+        return "影响存储价格、GPU 交付和硬件供应链利润弹性。"
+    if "数据中心" in theme_name or "电力" in theme_name:
+        return "影响 AI 云扩张节奏、租赁成本和基建 ROI 假设。"
+    if "出口" in theme_name or "监管" in theme_name:
+        return "影响销售区域、供给可得性和估值折价。"
+    if "capex" in theme_name or "回报" in theme_name:
+        return "影响云厂商资本开支持续性和 AI 基建估值。"
+    if "估值" in theme_name:
+        return "影响市场风险偏好和 AI 资产重定价。"
+    return "影响相关公司的收入兑现、成本假设和估值预期。"
 
 
 def _join(values: list[str]) -> str:

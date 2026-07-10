@@ -50,7 +50,7 @@ def render_diagnostics_text(source_stats: list[dict[str, object]]) -> str:
     main_reasons = sorted(failure_reasons.items(), key=lambda item: (-item[1], item[0]))[:3]
     lines = [
         "",
-        "七、抓取诊断",
+        "抓取诊断",
         f"- 成功源：{_join_source_names(success_sources)}",
         f"- 部分成功源：{_join_source_names(partial_sources)}",
         f"- 失败源：{_join_source_names(failed_sources)}",
