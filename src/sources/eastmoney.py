@@ -77,6 +77,9 @@ CONTEXTUAL_AI_KEYWORDS = (
 EXCLUDED_NON_AI_TOPICS = (
     "航天",
     "火箭",
+    "商业航天",
+    "可回收火箭",
+    "可回收技术",
     "卫星",
     "军工",
     "低空经济",
@@ -92,6 +95,8 @@ EXCLUDED_NON_AI_TOPICS = (
     "互动易",
     "技术分析",
     "机构紧盯多只概念股",
+    "机构紧盯",
+    "概念股",
 )
 
 MARKET_NOISE_KEYWORDS = (

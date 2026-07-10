@@ -206,7 +206,7 @@ def _html_core_events(bundle: EventBundle) -> str:
               <div><span class="tag">{escape(event.importance)}</span><span class="tag tag-soft">{escape(status_label(event.signal_status))}</span></div>
               <h3 class="event-title">{escape(_clean(event.title))}</h3>
               <div class="muted">{escape(event.industry_layer)}｜{escape(_theme_labels(event, bundle))}</div>
-              <p><span class="label">来源：</span>{escape(event.source)}</p>
+              <p><span class="label">信息源：</span>{escape(event.source)}</p>
               <p><span class="label">事实摘要：</span>{escape(_brief(event.fact, 120))}</p>
               <p><span class="label">增量判断：</span>{escape(_incremental_judgment(event))}</p>
               <p><span class="label">投研含义：</span>{escape(_brief(event.investment_implication, 140))}</p>
@@ -306,20 +306,13 @@ def _html_watchlist(bundle: EventBundle) -> str:
         return _section_card("观察池", '<div class="watch">暂无进入观察池的弱信号。</div>')
     rows = []
     for event in bundle.watch_events[:8]:
-        link_html = (
-            '<span class="muted">链接待确认</span>'
-            if event.link_status == "unknown"
-            else f'<a href="{escape(_event_link_url(event), quote=True)}">查看原文</a>'
-        )
+        link_html = _watch_link_html(event)
         rows.append(
             f"""
             <div class="compact-item watch">
-              <div><strong>标题：</strong>{escape(_clean(event.title))}</div>
-              <div><strong>来源：</strong>{escape(event.source)}</div>
-              <div><strong>AI 投资相关点：</strong>{escape(_watch_relevance(event))}</div>
-              <div><strong>当前限制：</strong>{escape(_watch_limit(event))}</div>
-              <div><strong>处理建议：</strong>暂不进入核心信号，等待公告或其他来源验证</div>
-              <div><strong>链接：</strong>{link_html}</div>
+              <div><strong>{escape(_clean(event.title))}｜{escape(event.industry_layer)}</strong></div>
+              <div>关注点：{escape(_watch_focus(event))}</div>
+              {f"<div>{link_html}</div>" if link_html else ""}
             </div>
             """
         )
@@ -396,7 +389,7 @@ def _render_core_event(event: DigestEvent, bundle: EventBundle) -> list[str]:
         f"【{event.importance}】{_clean(event.title)}",
         f"产业链：{event.industry_layer}",
         f"主线：{_theme_labels(event, bundle)}",
-        f"来源：{event.source}",
+        f"信息源：{event.source}",
         "",
         f"事实摘要：{_brief(event.fact, 120)}",
         f"增量判断：{_incremental_judgment(event)}",
@@ -406,7 +399,7 @@ def _render_core_event(event: DigestEvent, bundle: EventBundle) -> list[str]:
     ]
     for variable in event.follow_up_variables[:3]:
         lines.append(f"- {variable.name}：{variable.direction_to_watch}，{variable.why}")
-    lines.append(f"链接：{_event_link_url(event)}")
+    lines.append(f"查看原文：{_event_link_url(event)}")
     return lines
 
 
@@ -459,17 +452,10 @@ def _render_watch_events(events: list[DigestEvent]) -> list[str]:
         return ["暂无进入观察池的弱信号。"]
     lines: list[str] = []
     for event in events[:8]:
-        lines.extend(
-            [
-                "",
-                f"标题：{_clean(event.title)}",
-                f"来源：{event.source}",
-                f"AI 投资相关点：{_watch_relevance(event)}",
-                f"当前限制：{_watch_limit(event)}",
-                "处理建议：暂不进入核心信号，等待公告或其他来源验证",
-                f"链接：{'链接待确认' if event.link_status == 'unknown' else _event_link_url(event)}",
-            ]
-        )
+        lines.extend(["", f"- {_clean(event.title)}｜{event.industry_layer}", f"  关注点：{_watch_focus(event)}"])
+        link_line = _watch_link_text(event)
+        if link_line:
+            lines.append(f"  {link_line}")
     return lines
 
 
@@ -601,6 +587,30 @@ def _watch_limit(event: DigestEvent) -> str:
         limits.append("链接待确认")
     limits.append("尚未交叉验证")
     return " / ".join(dict.fromkeys(limits))
+
+
+def _watch_focus(event: DigestEvent) -> str:
+    relevance = _watch_relevance(event).rstrip("。")
+    limit = _watch_limit(event).rstrip("。")
+    return f"{relevance}；{limit}，等待公告或权威来源交叉验证。"
+
+
+def _watch_link_text(event: DigestEvent) -> str:
+    url = _event_link_url(event)
+    if event.link_status == "valid" and url:
+        return "查看原文"
+    if event.link_status == "unknown":
+        return "链接待确认"
+    return ""
+
+
+def _watch_link_html(event: DigestEvent) -> str:
+    url = _event_link_url(event)
+    if event.link_status == "valid" and url:
+        return f'<a href="{escape(url, quote=True)}">查看原文</a>'
+    if event.link_status == "unknown":
+        return '<span class="muted">链接待确认</span>'
+    return ""
 
 
 def _impact_companies(event: DigestEvent) -> str:

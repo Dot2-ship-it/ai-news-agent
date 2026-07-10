@@ -9,6 +9,7 @@ from urllib.parse import urlparse, urlunparse
 import yaml
 
 from .models import DailyDigest, NewsItem, WatchItem
+from .sources.eastmoney import has_ai_investment_theme, has_investment_increment, is_excluded_non_ai_topic, is_plain_market_move
 from .utils import normalize_title
 
 THEMES_PATH = Path("config/themes.yaml")
@@ -354,14 +355,16 @@ def is_readable_watch_event(event: DigestEvent) -> bool:
 
 
 def _ai_investment_relevance_point(event: DigestEvent) -> str | None:
+    text = f"{event.title}\n{event.signal_type}\n{event.industry_layer}\n{event.fact}"
+    if is_excluded_non_ai_topic(event.title, text) or is_plain_market_move(event.title, text):
+        return None
+    if not has_ai_investment_theme(event.title, text):
+        return None
+    if not has_investment_increment(event.title, text):
+        return None
     if event.ai_investment_relevance:
         return event.ai_investment_relevance
-    text = f"{event.title}\n{event.signal_type}\n{event.industry_layer}\n{event.fact}"
-    if any(
-        keyword.lower() in text.lower()
-        for keyword in ("ai", "人工智能", "大模型", "算力", "gpu", "芯片", "半导体", "hbm", "dram", "数据中心", "机器人")
-    ):
-        return f"{event.signal_type} 与 AI 产业链投资变量相关。"
+    return f"{event.signal_type} 与 AI 产业链投资变量相关。"
     return None
 
 

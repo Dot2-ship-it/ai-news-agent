@@ -43,7 +43,7 @@ def validate_link(url: str, timeout: float = 8.0) -> LinkValidationResult:
         return LinkValidationResult("unknown", url, type(exc).__name__, checked_at)
 
     final_url = str(response.url)
-    if response.status_code in {403, 404, 410, 500} or response.status_code >= 500:
+    if response.status_code in {401, 403, 404, 410, 500} or response.status_code >= 500:
         return LinkValidationResult("invalid", final_url, f"http_{response.status_code}", checked_at)
     if response.status_code != 200:
         return LinkValidationResult("unknown", final_url, f"http_{response.status_code}", checked_at)
@@ -61,9 +61,27 @@ def _looks_like_invalid_redirect(original_url: str, final_url: str, html: str) -
     final = urlparse(final_url)
     final_path = final.path.rstrip("/")
     original_path = original.path.rstrip("/")
-    if original.netloc == final.netloc and original_path not in {"", "/"} and final_path in {"", "/"}:
+    if original_path not in {"", "/"} and final_path in {"", "/"}:
         return True
     lowered = f"{final_url}\n{html}".lower()
-    if any(marker in lowered for marker in ("login", "signin", "sign-in", "登录", "请登录", "404", "not found", "页面不存在")):
+    if len(html.strip()) < 120:
+        return True
+    if any(
+        marker in lowered
+        for marker in (
+            "login",
+            "signin",
+            "sign-in",
+            "登录",
+            "请登录",
+            "404",
+            "not found",
+            "页面不存在",
+            "error page",
+            "access denied",
+            "forbidden",
+            "页面错误",
+        )
+    ):
         return True
     return False

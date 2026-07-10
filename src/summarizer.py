@@ -9,7 +9,7 @@ from openai import OpenAI
 
 from .investment_filter import derive_report_fields
 from .models import Article, DailyDigest, WatchItem
-from .sources.eastmoney import has_ai_investment_theme
+from .sources.eastmoney import has_ai_investment_theme, has_investment_increment, is_excluded_non_ai_topic, is_plain_market_move
 
 
 BANNED_STYLE_WORDS = [
@@ -500,11 +500,15 @@ JSON schema：
 
     @staticmethod
     def _ai_investment_relevance_point(article: Article) -> str | None:
+        if is_excluded_non_ai_topic(article.title, article.content) or is_plain_market_move(article.title, article.content):
+            return None
         if not has_ai_investment_theme(article.title, article.content):
+            return None
+        if not has_investment_increment(article.title, f"{article.content}\n{' '.join(article.matched_signals)}"):
             return None
         if article.matched_signals:
             return f"{'、'.join(article.matched_signals[:3])} 与 AI 产业链投资变量相关。"
-        return "具备 AI 产业链相关性，但仍缺少足够投资增量。"
+        return "具备 AI 产业链相关性和投资变量，但仍缺少足够细节或交叉验证。"
 
     @staticmethod
     def _watch_current_limit(article: Article) -> str:

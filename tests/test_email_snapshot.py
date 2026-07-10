@@ -40,7 +40,7 @@ class EmailSnapshotTest(unittest.TestCase):
         self.assertIn("核心信号 Top 3", email)
         self.assertIn("主线变化", email)
         self.assertIn("观察池", email)
-        for required_field in ("来源：", "变化说明：", "投研含义：", "下一步验证："):
+        for required_field in ("信息源：", "变化说明：", "投研含义：", "下一步验证："):
             self.assertIn(required_field, email)
         core_section = self._section(email, "核心信号 Top 3", "主线变化")
         self.assertEqual(core_section.count("事实摘要："), 3)
@@ -56,7 +56,6 @@ class EmailSnapshotTest(unittest.TestCase):
             "evidence_level",
             "confidence_level",
             "原始主题标签",
-            "状态：",
             "今日事件：",
             "新增事件：",
             "历史数据不足，暂按本轮首次记录处理",
@@ -91,7 +90,7 @@ class EmailSnapshotTest(unittest.TestCase):
         self.assertIn("今日摘要", html)
         self.assertIn("观察池", html)
         self.assertIn("查看原文", html)
-        self.assertIn("来源：", html)
+        self.assertIn("信息源：", html)
         self.assertIn("变化说明：", html)
         for removed_heading in ("产业链层次", "公司层次", "本周继续追踪", "今日结论"):
             self.assertNotIn(removed_heading, html)
@@ -108,7 +107,6 @@ class EmailSnapshotTest(unittest.TestCase):
             "evidence_level",
             "confidence_level",
             "原始主题标签",
-            "状态：",
             "今日事件：",
             "新增事件：",
             "历史数据不足，暂按本轮首次记录处理",
@@ -222,6 +220,19 @@ class EmailSnapshotTest(unittest.TestCase):
                     link_status="unknown",
                 ),
                 WatchItem(
+                    title="AI 数据中心资本开支线索缺少原文链接",
+                    url="",
+                    source="unknown",
+                    industry_layer="AI Capex / 算力基础设施",
+                    signal_type="资本开支",
+                    score=64,
+                    status="watch",
+                    watch_variables=["资本开支"],
+                    ai_investment_relevance="AI 数据中心资本开支与算力基础设施投资变量相关。",
+                    current_limit="来源单一 / 细节不足",
+                    link_status="invalid",
+                ),
+                WatchItem(
                     title="长征十号乙首飞在即 可回收技术突破将至？机构紧盯多只概念股",
                     url="https://finance.eastmoney.com/a/space.html",
                     source="东方财富",
@@ -232,14 +243,43 @@ class EmailSnapshotTest(unittest.TestCase):
                     watch_variables=["概念股"],
                     link_status="valid",
                 ),
+                WatchItem(
+                    title="商业航天公司融资进展引发机构紧盯多只概念股",
+                    url="https://finance.eastmoney.com/a/commercial-space.html",
+                    source="东方财富",
+                    industry_layer="二级市场与资金面",
+                    signal_type="融资",
+                    score=65,
+                    status="watch",
+                    watch_variables=["融资"],
+                    ai_investment_relevance="商业航天融资与泛投资主题相关。",
+                    current_limit="未说明 AI 投资相关点",
+                    link_status="valid",
+                ),
             ],
         )
         email = render_email_text(digest, source_stats=[])
+        html = render_email_html(digest, source_stats=[])
+        for rendered in (email, html):
+            for removed_field in (
+                "标题：",
+                "来源：",
+                "AI 投资相关点：",
+                "当前限制：",
+                "处理建议：",
+                "链接状态：",
+                "链接：",
+                "Synthetic",
+            ):
+                self.assertNotIn(removed_field, rendered)
         self.assertNotIn("Broken QbitAI", email)
         self.assertNotIn("446778.html", email)
-        self.assertIn("AI 投资相关点：AI 服务器订单与算力供应链收入变量相关。", email)
-        self.assertIn("链接：链接待确认", email)
+        self.assertIn("AI 服务器订单待确认｜半导体与硬件供应链", email)
+        self.assertIn("关注点：AI 服务器订单与算力供应链收入变量相关", email)
+        self.assertIn("链接待确认", email)
+        self.assertNotIn("AI 数据中心资本开支线索缺少原文链接\n  链接", email)
         self.assertNotIn("长征十号乙", email)
+        self.assertNotIn("商业航天", email)
         self.assertNotIn("航天", email)
         self.assertNotIn("火箭", email)
         self.assertNotIn("可回收技术", email)
@@ -266,6 +306,14 @@ class EmailSnapshotTest(unittest.TestCase):
                 "fetch_failed",
                 "gdelt_rate_limited",
                 "partial_success",
+                "标题：",
+                "来源：",
+                "AI 投资相关点：",
+                "当前限制：",
+                "处理建议：",
+                "链接状态：",
+                "链接：",
+                "Synthetic",
             ):
                 self.assertNotIn(internal, rendered)
 

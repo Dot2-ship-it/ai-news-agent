@@ -94,6 +94,23 @@ class EventAggregatorRulesTest(unittest.TestCase):
         bundle = build_event_bundle(digest)
         self.assertEqual(bundle.watch_events, [])
 
+    def test_non_ai_investment_watch_item_is_filtered_even_with_relevance_text(self) -> None:
+        watch_item = WatchItem(
+            title="长征十号乙首飞在即 可回收技术突破将至？机构紧盯多只概念股",
+            url="https://finance.eastmoney.com/a/space.html",
+            source="东方财富",
+            industry_layer="二级市场与资金面",
+            signal_type="市场异动",
+            score=70,
+            status="watch",
+            watch_variables=["概念股"],
+            ai_investment_relevance="泛投资变量，但没有 AI 强相关主题。",
+            link_status="valid",
+        )
+        digest = DailyDigest(subject="AI 投研情报日报｜2026-07-09", opening_summary="", trend="", items=[], watchlist=[watch_item])
+        bundle = build_event_bundle(digest)
+        self.assertEqual(bundle.watch_events, [])
+
     def test_low_confidence_d_or_e_event_not_in_core(self) -> None:
         low_item = make_item(
             "Unconfirmed AI cloud rumor",
