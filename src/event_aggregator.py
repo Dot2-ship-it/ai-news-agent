@@ -12,13 +12,15 @@ from .models import DailyDigest, NewsItem, WatchItem
 from .utils import normalize_title
 
 THEMES_PATH = Path("config/themes.yaml")
+THEME_HISTORY_PATH = Path("theme_history.json")
 SIGNAL_STATUS_LABELS = {
-    "new": "新增",
+    "first_seen": "本轮首次记录",
+    "new": "本轮首次记录",
     "continuing": "延续",
-    "escalating": "升级",
-    "weakening": "减弱",
-    "reversing": "反转",
-    "noise": "噪音",
+    "escalating": "升温",
+    "weakening": "降温",
+    "reversing": "待确认",
+    "noise": "待确认",
 }
 
 
@@ -59,6 +61,7 @@ class DigestEvent:
     relevance_score: int
     importance: str
     is_watch: bool = False
+    is_partial: bool = False
 
 
 @dataclass
@@ -68,6 +71,9 @@ class ThemeChange:
     signal_status: str
     evidence_count: int
     high_weight_count: int
+    today_event_titles: list[str] = field(default_factory=list)
+    new_event_titles: list[str] = field(default_factory=list)
+    history_available: bool = False
 
 
 @dataclass
@@ -148,6 +154,7 @@ def event_from_item(item: NewsItem, themes: list[ThemeDefinition]) -> DigestEven
         theme_ids=map_theme_ids(text, item.industry_layer or "", item.signal_type or "", themes),
         relevance_score=item.investment_score,
         importance=item.importance,
+        is_partial=item.is_partial,
     )
     return event
 
@@ -178,6 +185,7 @@ def event_from_watch_item(item: WatchItem, themes: list[ThemeDefinition]) -> Dig
         relevance_score=item.score,
         importance="低",
         is_watch=True,
+        is_partial=True,
     )
 
 
@@ -235,7 +243,7 @@ def infer_confidence_level(
 def infer_signal_status(text: str) -> str:
     lowered = text.lower()
     if any(word in lowered for word in ("反转", "转向", "reverse", "reversing")):
-        return "reversing"
+        return "new"
     if any(word in lowered for word in ("扩大", "升级", "加码", "accelerate", "expand", "escalat")):
         return "escalating"
     if any(word in lowered for word in ("放缓", "下修", "回落", "减弱", "slow", "weaken", "decline")):
@@ -326,6 +334,7 @@ def is_readable_watch_event(event: DigestEvent) -> bool:
 def build_theme_changes(events: list[DigestEvent], themes: list[ThemeDefinition]) -> list[ThemeChange]:
     theme_by_id = {theme.id: theme for theme in themes}
     status_rank = {"escalating": 5, "reversing": 4, "weakening": 3, "continuing": 2, "new": 1, "noise": 0}
+    history_available = THEME_HISTORY_PATH.exists()
     grouped: dict[str, list[DigestEvent]] = {}
     for event in events:
         for theme_id in event.theme_ids:
@@ -333,6 +342,9 @@ def build_theme_changes(events: list[DigestEvent], themes: list[ThemeDefinition]
     changes = []
     for theme_id, theme_events in grouped.items():
         status = max((event.signal_status for event in theme_events), key=lambda value: status_rank.get(value, 0))
+        if not history_available:
+            status = "first_seen"
+        event_titles = [event.title for event in theme_events[:3]]
         changes.append(
             ThemeChange(
                 theme_id=theme_id,
@@ -340,6 +352,9 @@ def build_theme_changes(events: list[DigestEvent], themes: list[ThemeDefinition]
                 signal_status=status,
                 evidence_count=len(theme_events),
                 high_weight_count=sum(1 for event in theme_events if event.confidence_level == "高"),
+                today_event_titles=event_titles,
+                new_event_titles=event_titles if not history_available else [event.title for event in theme_events if event.signal_status == "new"],
+                history_available=history_available,
             )
         )
     return sorted(changes, key=lambda item: (-item.high_weight_count, -item.evidence_count, item.theme_name))[:6]

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .models import Article, SourceConfig
+from .sources.eastmoney import EASTMONEY_SOURCE_ID, has_investment_increment, is_plain_market_move
 
 AI_KEYWORDS = (
     "AI",
@@ -543,8 +544,12 @@ def score_article(
     signals = signal_matches(text)
     ai_relevant = contains_any(text, AI_KEYWORDS)
     investment_relevant = bool(signals) or contains_any(text, INVESTMENT_KEYWORDS)
+    eastmoney_increment = source.id == EASTMONEY_SOURCE_ID and has_investment_increment(article.title, article.content)
+    eastmoney_plain_market_noise = source.id == EASTMONEY_SOURCE_ID and is_plain_market_move(article.title, article.content)
+    if eastmoney_increment:
+        investment_relevant = True
     tracked_match = bool(companies)
-    noise = contains_any(text, NOISE_KEYWORDS)
+    noise = contains_any(text, NOISE_KEYWORDS) or eastmoney_plain_market_noise
 
     score = 0
     if source.quality_tier == 1:
@@ -587,6 +592,10 @@ def score_article(
         score += 20
     if tracked_match:
         score += 20
+    if eastmoney_increment:
+        score += 15
+    if eastmoney_plain_market_noise:
+        score -= 40
 
     if article.published_at:
         hours_old = (end_time - article.published_at.astimezone(end_time.tzinfo)).total_seconds() / 3600
@@ -610,11 +619,17 @@ def score_article(
         threshold = 40
     if source.source_type == "flash_news":
         threshold = 55
+    if source.id == EASTMONEY_SOURCE_ID:
+        threshold = 55
     keep = keep and score >= threshold
+    if source.id == EASTMONEY_SOURCE_ID and signals and not eastmoney_increment and set(signals).issubset({"market_reaction"}):
+        keep = False
 
     reason = "kept" if keep else "AI/投研相关性不足"
     if noise:
-        reason = "噪声内容：教程/论文/测评/活动或工具类"
+        reason = "噪声内容：教程/论文/测评/活动、工具类或无明确原因的行情波动"
+    elif source.id == EASTMONEY_SOURCE_ID and signals and not eastmoney_increment and set(signals).issubset({"market_reaction"}):
+        reason = "东方财富行情异动缺少明确投资增量"
     elif not investment_relevant:
         reason = "缺少投研信号"
     elif not ai_relevant and not tracked_match:

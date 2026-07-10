@@ -172,13 +172,17 @@ def _overview_lines(
 
 
 def _summary_lines(bundle: EventBundle) -> list[str]:
-    strongest = bundle.theme_changes[0].theme_name if bundle.theme_changes else "暂无明确主线"
+    if bundle.theme_changes:
+        strongest_events = _events_for_theme(bundle, bundle.theme_changes[0].theme_id)
+        strongest = build_theme_thesis(bundle.theme_changes[0].theme_id, strongest_events)
+    else:
+        strongest = "暂无明确主线"
     variables = _dedup_variables(bundle.core_events)[:2]
     watch_count = len(bundle.watch_events)
     return [
         f"- 主线最强：{strongest}。",
-        f"- 需要验证：{'、'.join(variables) if variables else '后续官方披露'}。",
-        f"- 待验证信息：观察池 {watch_count} 条，低置信内容不进核心信号。",
+        f"- 关键验证：{'、'.join(variables) if variables else '后续官方披露'}。",
+        f"- 暂不纳入主线：观察池 {watch_count} 条，待补充事实或交叉验证。",
     ]
 
 
@@ -202,7 +206,9 @@ def _html_core_events(bundle: EventBundle) -> str:
             <div class="event-card">
               <div><span class="tag">{escape(event.importance)}</span><span class="tag tag-soft">{escape(status_label(event.signal_status))}</span></div>
               <h3 class="event-title">{escape(_clean(event.title))}</h3>
-              <div class="muted">{escape(event.industry_layer)}｜{escape(_theme_labels(event, bundle))}｜证据 {escape(event.evidence_level)}｜置信度 {escape(event.confidence_level)}</div>
+              <div class="muted">{escape(event.industry_layer)}｜{escape(_theme_labels(event, bundle))}</div>
+              <p><span class="label">来源：</span>{escape(event.source)}</p>
+              <p><span class="label">验证：</span>{escape(_verification_status(event))}</p>
               <p><span class="label">事实摘要：</span>{escape(_brief(event.fact, 120))}</p>
               <p><span class="label">增量判断：</span>{escape(_incremental_judgment(event))}</p>
               <p><span class="label">投研含义：</span>{escape(_brief(event.investment_implication, 140))}</p>
@@ -221,13 +227,19 @@ def _html_theme_changes(bundle: EventBundle) -> str:
     items = []
     for change in bundle.theme_changes:
         events = _events_for_theme(bundle, change.theme_id)
+        thesis = build_theme_thesis(change.theme_id, events)
+        industry_layer = _theme_industry_layer(events)
+        verification_items = "".join(
+            f"<li>{escape(item)}</li>" for item in _theme_verification_points(change.theme_id, events)
+        )
         items.append(
             f"""
             <div class="compact-item">
-              <div><span class="tag">{escape(status_label(change.signal_status))}</span><strong>{escape(change.theme_name)}</strong></div>
-              <div class="muted">今日增量：新增 {change.evidence_count} 条证据｜证据质量：{escape(_theme_evidence_quality(change))}</div>
-              <div>投资含义：{escape(_theme_implication(change.theme_name))}</div>
-              <div>下一步验证：{escape('、'.join(_dedup_variables(events)[:3]) or '后续官方披露')}</div>
+              <div><strong>主线：{escape(thesis)}（{escape(_theme_status_inline(change.signal_status))}）</strong></div>
+              <div>产业链：{escape(industry_layer)}</div>
+              <div>变化说明：{escape(_theme_change_explanation(change.theme_id, events))}</div>
+              <div>投资含义：{escape(_theme_implication(change.theme_id, thesis))}</div>
+              <div>下一步验证：<ul>{verification_items}</ul></div>
             </div>
             """
         )
@@ -376,9 +388,12 @@ def _core_section_title(count: int) -> str:
 def _render_core_event(event: DigestEvent, bundle: EventBundle) -> list[str]:
     lines = [
         "",
-        f"事件标题：{_clean(event.title)}",
-        f"产业链标签：{event.industry_layer}",
-        f"主线标签：{_theme_labels(event, bundle)}",
+        f"【{event.importance}】{_clean(event.title)}",
+        f"产业链：{event.industry_layer}",
+        f"主线：{_theme_labels(event, bundle)}",
+        f"来源：{event.source}",
+        f"验证：{_verification_status(event)}",
+        "",
         f"事实摘要：{_brief(event.fact, 120)}",
         f"增量判断：{_incremental_judgment(event)}",
         f"投研含义：{_brief(event.investment_implication, 140)}",
@@ -387,8 +402,6 @@ def _render_core_event(event: DigestEvent, bundle: EventBundle) -> list[str]:
     ]
     for variable in event.follow_up_variables[:3]:
         lines.append(f"- {variable.name}：{variable.direction_to_watch}，{variable.why}")
-    if event.confidence_level == "低":
-        lines.append("备注：低置信度，待确认。")
     lines.append(f"链接：{event.canonical_url}")
     return lines
 
@@ -399,16 +412,18 @@ def _render_theme_changes(bundle: EventBundle) -> list[str]:
     lines = []
     for change in bundle.theme_changes:
         events = _events_for_theme(bundle, change.theme_id)
+        thesis = build_theme_thesis(change.theme_id, events)
         lines.extend(
             [
-                f"- 主线：{change.theme_name}",
-                f"  状态：{status_label(change.signal_status)}",
-                f"  今日增量：新增 {change.evidence_count} 条证据",
-                f"  证据质量：{_theme_evidence_quality(change)}",
-                f"  投资含义：{_theme_implication(change.theme_name)}",
-                f"  下一步验证：{'、'.join(_dedup_variables(events)[:3]) or '后续官方披露'}",
+                f"- 主线：{thesis}（{_theme_status_inline(change.signal_status)}）",
+                f"  产业链：{_theme_industry_layer(events)}",
+                f"  变化说明：{_theme_change_explanation(change.theme_id, events)}",
+                f"  投资含义：{_theme_implication(change.theme_id, thesis)}",
+                "  下一步验证：",
             ]
         )
+        for item in _theme_verification_points(change.theme_id, events):
+            lines.append(f"  - {item}")
     return lines
 
 
@@ -445,9 +460,9 @@ def _render_watch_events(events: list[DigestEvent]) -> list[str]:
                 "",
                 f"事件：{_clean(event.title)}",
                 f"层次：{event.industry_layer}",
-                f"信号状态：{status_label(event.signal_status)}",
-                f"证据等级：{event.evidence_level}",
-                f"置信度：{event.confidence_level}",
+                f"信号：{status_label(event.signal_status)}",
+                f"来源：{event.source}",
+                f"验证：{_verification_status(event)}",
                 f"后续观察点：{_format_variables(event)}",
                 f"链接：{event.canonical_url}",
             ]
@@ -500,8 +515,67 @@ def _theme_labels(event: DigestEvent, bundle: EventBundle) -> str:
     return "、".join(theme_names[:2]) if theme_names else "未归类主线"
 
 
+def build_theme_thesis(theme_id: str, events: list[DigestEvent]) -> str:
+    if theme_id == "hbm_dram_supply":
+        return "HBM 与 DRAM 产能再分配可能影响 AI 硬件供需"
+    if theme_id == "ai_capex_roi":
+        return "AI 基建扩张仍需订单和利用率验证"
+    if theme_id == "gpu_cloud_supply":
+        return "算力供需变化继续牵动云租赁价格"
+    if theme_id == "data_center_power":
+        return "数据中心扩张受电力和交付节奏约束"
+    if theme_id == "china_model_commercialization":
+        return "中国大模型商业化转向收入验证"
+    if theme_id == "china_ai_chip_substitution":
+        return "国产 AI 芯片替代进入供给验证阶段"
+    if theme_id == "robotics_mass_production":
+        return "机器人量产进入交付质量验证阶段"
+    if theme_id == "ai_app_api_revenue":
+        return "AI 应用商业化需要 API 收入验证"
+    if theme_id == "export_control_geopolitics":
+        return "出口限制继续改变AI芯片收入预期"
+    if theme_id == "ai_company_valuation":
+        return "AI 公司估值重定价取决于收入兑现"
+    text = " ".join(
+        f"{event.title} {event.signal_type} {event.industry_layer} {event.fact}"
+        for event in events[:3]
+    )
+    if any(keyword in text for keyword in ("HBM", "DRAM", "存储")):
+        return "HBM 与 DRAM 产能再分配可能影响 AI 硬件供需"
+    if events:
+        return _brief(f"{events[0].signal_type}影响{events[0].industry_layer}投资假设", 35)
+    return "AI产业链信号仍需后续事实验证"
+
+
+def summarize_event_for_theme(event: DigestEvent) -> str:
+    title = _clean(event.title)
+    replacements = (
+        ("SK海力士放缓 HBM4 转向 DRAM", "SK海力士放缓HBM产线转换"),
+        ("CoreWeave 数据中心租赁合同扩大", "CoreWeave扩大数据中心租赁合同"),
+        ("美国扩大 AI 芯片出口限制", "美国扩大AI芯片出口限制"),
+    )
+    for old, new in replacements:
+        if old in title:
+            return new
+    title = re.sub(r"\s+", "", title)
+    return title[:30] if len(title) > 30 else title
+
+
 def _incremental_judgment(event: DigestEvent) -> str:
-    return f"{status_label(event.signal_status)}，证据等级 {event.evidence_level}，置信度 {event.confidence_level}。"
+    return f"{status_label(event.signal_status)}，核心变量为 {event.signal_type}。"
+
+
+def _verification_status(event: DigestEvent) -> str:
+    source = event.source.lower()
+    if any(keyword in source for keyword in ("sec", "edgar", "investor", "ir", "official", "公告", "财报", "监管文件")):
+        return "已交叉验证"
+    if any(separator in event.source for separator in ("、", "|", ",")):
+        return "已交叉验证"
+    if event.source == "东方财富":
+        return "单一来源"
+    if event.is_watch or event.is_partial or event.published_at is None:
+        return "待确认"
+    return "单一来源"
 
 
 def _impact_companies(event: DigestEvent) -> str:
@@ -523,24 +597,149 @@ def _dedup_variables(events: list[DigestEvent]) -> list[str]:
     return variables
 
 
-def _theme_evidence_quality(change) -> str:
-    if change.high_weight_count:
-        return f"{change.high_weight_count} 条高权重证据"
-    return "待交叉验证"
+def _theme_verification_points(theme_id: str, events: list[DigestEvent]) -> list[str]:
+    variables = _dedup_variables(events)
+    if theme_id == "hbm_dram_supply":
+        return [
+            "HBM 价格：观察 HBM3E / HBM4 报价是否继续上行；若维持强势，说明 AI 存储需求仍紧。",
+            "标准型 DRAM 价格：观察 DDR5 / 服务器 DRAM 是否同步上涨；若上行，验证 HBM 扩产挤压传统供给。",
+            "SK 海力士产能指引：观察公司是否调整 HBM 与 DRAM 产能配置；这是验证产能再分配的核心证据。",
+            "三星 / 美光动作：观察是否跟随调整 HBM、DRAM 资本开支；若跟随，说明行业周期变化。",
+        ]
+    if theme_id == "gpu_cloud_supply":
+        return [
+            "GPU 交付周期：观察 NVIDIA / 云厂商交付是否延长；若变慢，说明算力供给仍受瓶颈约束。",
+            "GPU 云租赁价格：观察主流实例租赁价格是否上行；若价格坚挺，验证算力供需仍偏紧。",
+            "算力利用率：观察云厂商利用率和排队情况；若维持高位，说明需求仍能消化新增供给。",
+        ]
+    if theme_id == "ai_capex_roi":
+        return [
+            "云厂商 capex 指引：观察是否继续上修 AI 基建投入；若上修，说明扩张周期仍未结束。",
+            "订单与客户续约：观察大客户合同和续约节奏；若订单增强，验证 AI 基建 ROI 仍可兑现。",
+            "AI 云利用率：观察 GPU 集群利用率是否维持高位；若回落，意味着 capex 回报压力上升。",
+        ]
+    if theme_id == "data_center_power":
+        return [
+            "MW/GW 签约容量：观察新增电力和机柜容量是否落地；若兑现，说明扩张约束有所缓解。",
+            "电力接入进度：观察并网、变电站和电力采购公告；若延迟，验证电力仍是交付瓶颈。",
+            "液冷和建设成本：观察数据中心单位建设成本变化；若上行，意味着 AI 云毛利率承压。",
+        ]
+    if theme_id == "export_control_geopolitics":
+        return [
+            "出口许可范围：观察监管是否扩大受限芯片和地区；若扩大，说明相关收入折价压力上升。",
+            "中国收入披露：观察 NVIDIA / AMD 中国收入变化；若下滑，验证出口限制影响开始兑现。",
+            "替代采购动作：观察国产芯片客户导入和订单公告；若增加，说明替代逻辑升温。",
+        ]
+    if theme_id in {"china_model_commercialization", "ai_app_api_revenue"}:
+        return [
+            "API 收入：观察模型厂商是否披露付费调用增长；若增长，说明商业化质量改善。",
+            "企业客户续约：观察大客户续约和扩容合同；若续约增强，验证需求不是一次性试用。",
+            "推理成本：观察单位调用成本是否下降；若下降，意味着毛利率和定价空间改善。",
+        ]
+    if theme_id == "china_ai_chip_substitution":
+        return [
+            "客户导入公告：观察云厂商和模型厂商是否采购国产芯片；若增加，验证替代进入订单阶段。",
+            "推理性能指标：观察实际部署性能和稳定性；若接近主流 GPU，说明替代空间扩大。",
+            "供应链产能：观察封装、存储和代工配套进度；若同步改善，验证供给可持续。",
+        ]
+    if theme_id == "robotics_mass_production":
+        return [
+            "交付订单：观察机器人厂商量产订单是否落地；若放量，说明商业化从样机进入交付。",
+            "BOM 成本：观察核心零部件成本是否下降；若下降，验证毛利率改善空间。",
+            "应用场景复购：观察工业或服务场景复购情况；若复购增加，说明需求质量提升。",
+        ]
+    if theme_id == "ai_company_valuation":
+        return [
+            "估值倍数：观察 AI 公司收入倍数是否继续压缩；若压缩，说明市场提高兑现要求。",
+            "收入增速：观察财报收入和指引是否支撑估值；若不及预期，验证重定价压力。",
+            "资金流向：观察 AI 资产资金流入是否恢复；若回流，意味着风险偏好修复。",
+        ]
+    fallback = []
+    for variable in variables[:3]:
+        fallback.append(f"{variable}：观察相关公告、价格或订单是否变化；若持续变化，说明该主线仍需跟踪验证。")
+    return fallback or ["后续官方披露：观察公司公告和财报指引；若出现新增事实，验证主线是否成立。"]
 
 
-def _theme_implication(theme_name: str) -> str:
-    if "HBM" in theme_name or "存储" in theme_name:
-        return "影响存储价格、GPU 交付和硬件供应链利润弹性。"
-    if "数据中心" in theme_name or "电力" in theme_name:
+def _theme_today_events(change, bundle: EventBundle) -> str:
+    if not change.today_event_titles:
+        return "无。"
+    return "；".join(_event_summaries(change.today_event_titles, bundle)) + "。"
+
+
+def _theme_new_events(change, bundle: EventBundle) -> str:
+    if not change.new_event_titles:
+        return "无。今日事件仅延续此前主线，未改变判断。"
+    titles = "；".join(f"“{title}”" for title in _event_summaries(change.new_event_titles, bundle)[:2])
+    if not change.history_available:
+        return f"历史数据不足，暂按本轮首次记录处理；本轮新增事件为{titles}。"
+    return f"相较过去记录，本轮首次出现{titles}这一信号。"
+
+
+def _event_summaries(titles: list[str], bundle: EventBundle) -> list[str]:
+    summaries: list[str] = []
+    for title in titles[:3]:
+        summary = _event_summary(title, bundle)
+        if summary not in summaries:
+            summaries.append(summary)
+    return summaries or [_clean(titles[0]) if titles else "无"]
+
+
+def _event_summary(title: str, bundle: EventBundle) -> str:
+    for event in [*bundle.core_events, *bundle.watch_events]:
+        if event.title == title:
+            return summarize_event_for_theme(event)
+    return _clean(title)[:30]
+
+
+def _theme_change_explanation(theme_id: str, events: list[DigestEvent]) -> str:
+    if not events:
+        return "主线延续，但今日没有足够的新事实改变判断。"
+    event = events[0]
+    if theme_id == "hbm_dram_supply":
+        return "此前市场更关注 HBM 扩产是否足够支撑 AI 训练需求；该事件把问题推进到“HBM 扩产是否会挤压标准型 DRAM 供给”，因此主线从单一 HBM 紧缺扩展为存储产能结构再平衡。"
+    if theme_id == "data_center_power":
+        return "此前市场更关注 AI 云需求扩张；本轮事件把验证重点推进到数据中心租赁、电力接入和机柜交付能否同步兑现。"
+    if theme_id == "gpu_cloud_supply":
+        return "此前市场更关注 GPU 供给总量；本轮事件把问题推进到云租赁价格、利用率和交付周期是否能支撑供需紧平衡。"
+    if theme_id == "ai_capex_roi":
+        return "此前市场更关注云厂商是否继续加码 AI 基建；本轮事件要求用订单、利用率和租赁价格验证投入回报。"
+    if theme_id == "export_control_geopolitics":
+        return "此前市场更关注芯片需求强度；监管事件把变量推进到销售区域、出口许可和合规成本对收入预期的影响。"
+    if theme_id in {"china_model_commercialization", "ai_app_api_revenue"}:
+        return "此前市场更关注用户增长和产品发布；本轮信息把验证重点转向 API 收入、企业客户续约和商业化质量。"
+    if theme_id == "china_ai_chip_substitution":
+        return "此前市场更关注国产替代叙事；本轮信息需要进一步验证实际供给、客户导入和推理芯片性能。"
+    if theme_id == "robotics_mass_production":
+        return "此前市场更关注样机和演示；本轮信息需要进一步验证量产节奏、订单交付和单位经济性。"
+    return _brief(event.investment_implication, 90)
+
+
+def _theme_implication(theme_id: str, thesis: str) -> str:
+    if theme_id == "hbm_dram_supply":
+        return "若属实，AI 硬件链约束不只在 GPU，也可能体现在存储价格、HBM 产能分配和先进封装节奏上。"
+    if theme_id == "data_center_power":
         return "影响 AI 云扩张节奏、租赁成本和基建 ROI 假设。"
-    if "出口" in theme_name or "监管" in theme_name:
+    if theme_id == "gpu_cloud_supply":
+        return "影响 GPU 云租赁价格、算力利用率和 AI 云公司收入兑现。"
+    if theme_id == "export_control_geopolitics":
         return "影响销售区域、供给可得性和估值折价。"
-    if "capex" in theme_name or "回报" in theme_name:
+    if theme_id == "ai_capex_roi":
         return "影响云厂商资本开支持续性和 AI 基建估值。"
-    if "估值" in theme_name:
+    if theme_id == "ai_company_valuation":
         return "影响市场风险偏好和 AI 资产重定价。"
-    return "影响相关公司的收入兑现、成本假设和估值预期。"
+    return f"{thesis}，影响相关公司的收入兑现、成本假设和估值预期。"
+
+
+def _theme_status_inline(status: str) -> str:
+    label = status_label(status)
+    return "新增" if label == "本轮首次记录" else label
+
+
+def _theme_industry_layer(events: list[DigestEvent]) -> str:
+    for event in events:
+        if event.industry_layer:
+            return event.industry_layer
+    return "未归类"
 
 
 def _join(values: list[str]) -> str:

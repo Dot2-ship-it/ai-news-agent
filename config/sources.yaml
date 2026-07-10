@@ -158,6 +158,34 @@ sources:
     max_links: 25
     strict_ai_relevance: true
 
+  - id: eastmoney
+    name: 东方财富
+    source_name: 东方财富
+    source_type: market_news
+    quality_tier: 3
+    region: cn
+    region_scope: global
+    market_scope: public_and_private
+    asset_scope: equity, private_company, industry, policy, supply_chain
+    url: https://finance.eastmoney.com/
+    language: zh
+    strategy: summarize
+    requires_ai_filter: true
+    requires_investment_signal_filter: true
+    requires_time_filter: true
+    allow_unknown_time: true
+    crawl_depth: 1
+    investment_relevance: medium
+    allowed_domains: [finance.eastmoney.com, eastmoney.com, www.eastmoney.com]
+    include_patterns: [/a/]
+    exclude_patterns: [/guba/, /quote/, /zixun/, /video/, /pinglun/, /ask/, /data/, /stock/, /fund/]
+    fetch_strategy:
+      discovery_mode: list_page
+      body_mode: optional
+      allow_partial_article: true
+    max_links: 30
+    strict_ai_relevance: true
+
   - id: reuters_ai
     name: Reuters AI
     source_name: Reuters AI
