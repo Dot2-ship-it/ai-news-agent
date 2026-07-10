@@ -15,10 +15,10 @@ from src.crawler import NewsCrawler
 from src.emailer import render_email_html, render_email_subject, render_email_text, send_email
 from src.event_aggregator import build_event_bundle
 from src.models import Article, DailyDigest
-from src.storage import SeenStore
+from src.storage import SeenStore, SentDigestStore
 from src.summarizer import NewsSummarizer
 from src.translator import OpenAITranslator
-from src.utils import load_config, setup_logging
+from src.utils import content_hash, load_config, setup_logging
 
 logger = logging.getLogger(__name__)
 ARTIFACTS_DIR = Path("artifacts")
@@ -81,6 +81,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-items", type=int, default=5, help="Maximum number of news items in the digest")
     parser.add_argument("--max-per-source", type=int, default=2, help="Maximum selected items per source")
     parser.add_argument("--preview-email", action="store_true", help="Render a local sample email without fetching or sending")
+    parser.add_argument("--test-email", action="store_true", help="Send a test email to TEST_EMAIL_TO without updating sent state")
     return parser.parse_args()
 
 
@@ -89,7 +90,7 @@ def render_preview_email() -> str:
     data = json.loads(fixture_path.read_text(encoding="utf-8"))
     digest = DailyDigest.model_validate(data["digest"])
     source_stats = data.get("source_stats", [])
-    body = f"{render_email_text(digest, source_stats=source_stats)}\n{render_diagnostics_text(source_stats)}"
+    body = render_email_text(digest, source_stats=source_stats)
     html_body = render_email_html(digest, source_stats=source_stats)
     write_artifacts(body, html_body, digest, source_stats)
     return body
@@ -119,6 +120,38 @@ def write_artifacts(
         "crawl_diagnostics": str(diagnostics_path),
         "digest_events": str(events_path),
     }
+
+
+def build_digest_id(date: str, subject: str, digest: DailyDigest) -> str:
+    bundle = build_event_bundle(digest)
+    top_event_ids = [event.event_id for event in bundle.core_events[:5]]
+    payload = "\n".join([date, subject, *top_event_ids])
+    return content_hash(payload)
+
+
+def send_digest_once(
+    subject: str,
+    body: str,
+    html_body: str,
+    digest: DailyDigest,
+    date: str,
+    sent_store: SentDigestStore | None = None,
+) -> bool:
+    store = sent_store or SentDigestStore()
+    digest_id = build_digest_id(date, subject, digest)
+    if store.has_sent(digest_id):
+        logger.info("Digest already sent, skip sending.")
+        return False
+    send_email(subject, body, html_body=html_body)
+    store.mark_sent(digest_id)
+    return True
+
+
+def send_test_digest(subject: str, body: str, html_body: str) -> None:
+    test_recipient = os.getenv("TEST_EMAIL_TO")
+    if not test_recipient:
+        raise RuntimeError("Missing TEST_EMAIL_TO for test email mode")
+    send_email(f"[TEST] {subject}", body, html_body=html_body, to_email=test_recipient)
 
 
 def main() -> None:
@@ -167,6 +200,7 @@ def main() -> None:
                 "filtered_by_time_count": result.filtered_by_time_count,
                 "filtered_by_relevance_count": result.filtered_by_relevance_count,
                 "filtered_by_url_count": result.filtered_by_url_count,
+                "invalid_link_count": result.invalid_link_count,
                 "failed_count": result.failed_count,
                 "status": result.status,
                 "error_type": result.error_type,
@@ -252,17 +286,21 @@ def main() -> None:
         digest = NewsSummarizer.build_empty_digest(today, run_stats)
     subject = render_email_subject(digest)
     body = render_email_text(digest, source_stats=source_stats)
-    body = f"{body}\n{render_diagnostics_text(source_stats)}"
     html_body = render_email_html(digest, source_stats=source_stats)
     write_artifacts(body, html_body, digest, source_stats)
 
+    production_sent = False
     if args.dry_run:
         print(body)
+    elif args.test_email:
+        send_test_digest(subject, body, html_body)
+        logger.info("Test email sent: %s", subject)
     else:
-        send_email(subject, body, html_body=html_body)
-        logger.info("Email sent: %s", subject)
+        production_sent = send_digest_once(subject, body, html_body, digest, today)
+        if production_sent:
+            logger.info("Email sent: %s", subject)
 
-    if store and all_articles and not args.dry_run:
+    if store and all_articles and production_sent:
         store.add_articles(all_articles)
 
 

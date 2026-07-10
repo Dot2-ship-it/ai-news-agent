@@ -5,7 +5,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .models import Article, SourceConfig
-from .sources.eastmoney import EASTMONEY_SOURCE_ID, has_investment_increment, is_plain_market_move
+from .sources.eastmoney import (
+    EASTMONEY_SOURCE_ID,
+    has_ai_investment_theme,
+    has_investment_increment,
+    is_excluded_non_ai_topic,
+    is_plain_market_move,
+)
 
 AI_KEYWORDS = (
     "AI",
@@ -544,12 +550,16 @@ def score_article(
     signals = signal_matches(text)
     ai_relevant = contains_any(text, AI_KEYWORDS)
     investment_relevant = bool(signals) or contains_any(text, INVESTMENT_KEYWORDS)
+    eastmoney_ai_theme = source.id == EASTMONEY_SOURCE_ID and has_ai_investment_theme(article.title, article.content)
     eastmoney_increment = source.id == EASTMONEY_SOURCE_ID and has_investment_increment(article.title, article.content)
     eastmoney_plain_market_noise = source.id == EASTMONEY_SOURCE_ID and is_plain_market_move(article.title, article.content)
+    eastmoney_non_ai_noise = source.id == EASTMONEY_SOURCE_ID and is_excluded_non_ai_topic(article.title, article.content)
+    if source.id == EASTMONEY_SOURCE_ID:
+        ai_relevant = ai_relevant and eastmoney_ai_theme
     if eastmoney_increment:
         investment_relevant = True
     tracked_match = bool(companies)
-    noise = contains_any(text, NOISE_KEYWORDS) or eastmoney_plain_market_noise
+    noise = contains_any(text, NOISE_KEYWORDS) or eastmoney_plain_market_noise or eastmoney_non_ai_noise
 
     score = 0
     if source.quality_tier == 1:
@@ -622,12 +632,16 @@ def score_article(
     if source.id == EASTMONEY_SOURCE_ID:
         threshold = 55
     keep = keep and score >= threshold
+    if source.id == EASTMONEY_SOURCE_ID and not eastmoney_ai_theme:
+        keep = False
     if source.id == EASTMONEY_SOURCE_ID and signals and not eastmoney_increment and set(signals).issubset({"market_reaction"}):
         keep = False
 
     reason = "kept" if keep else "AI/投研相关性不足"
     if noise:
         reason = "噪声内容：教程/论文/测评/活动、工具类或无明确原因的行情波动"
+    elif source.id == EASTMONEY_SOURCE_ID and not eastmoney_ai_theme:
+        reason = "东方财富内容缺少 AI 投资强相关主题"
     elif source.id == EASTMONEY_SOURCE_ID and signals and not eastmoney_increment and set(signals).issubset({"market_reaction"}):
         reason = "东方财富行情异动缺少明确投资增量"
     elif not investment_relevant:

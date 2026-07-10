@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup
 from .extractor import extract_article_text, extract_article_title, extract_published_at
 from .gdelt_discovery import discover_gdelt_candidates
 from .investment_filter import is_preferred_article_path, is_url_noise, score_article
+from .link_validator import validate_link
 from .models import AgentConfig, Article, ArticleCandidate, SourceConfig, SourceRunResult
 from .utils import clean_url, normalize_title, parse_datetime
 
@@ -717,6 +718,10 @@ class NewsCrawler:
             discovery_method=candidate.discovery_method,
             is_partial=True,
             partial_reason=reason,
+            link_status=candidate.link_status,
+            link_error=candidate.link_error,
+            final_url=candidate.final_url,
+            link_checked_at=candidate.link_checked_at,
             content=content,
         )
 
@@ -754,6 +759,10 @@ class NewsCrawler:
             discovery_method=candidate.discovery_method,
             is_partial=False,
             partial_reason=None,
+            link_status="valid",
+            link_error=None,
+            final_url=clean_url(str(response.url)),
+            link_checked_at=datetime.now(timezone.utc),
             content=content,
         )
 
@@ -887,6 +896,13 @@ class NewsCrawler:
                 else:
                     result.filtered.append(f"正文提取不足：{candidate.url}")
                     continue
+            if article.link_status != "valid":
+                self._apply_link_validation(article, candidate)
+            if article.link_status == "invalid":
+                result.invalid_link_count += 1
+                result.filtered_by_url_count += 1
+                result.filtered.append(f"链接不可用：{article.title} ({article.link_error or 'invalid'})")
+                continue
             normalized_title = normalize_title(article.title)
             if article.url in seen_urls or normalized_title in seen_titles:
                 result.filtered.append(f"列表内重复：{article.title}")
@@ -953,6 +969,43 @@ class NewsCrawler:
             result.error,
         )
         return articles, result
+
+    @staticmethod
+    def _apply_link_validation(article: Article, candidate: ArticleCandidate) -> None:
+        candidates = [
+            article.final_url,
+            candidate.canonical_url,
+            candidate.source_url,
+            article.url,
+        ]
+        seen: set[str] = set()
+        unknown_result = None
+        invalid_errors: list[str] = []
+        for url in candidates:
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            result = validate_link(url)
+            if result.link_status == "valid":
+                article.link_status = "valid"
+                article.link_error = None
+                article.final_url = result.final_url or url
+                article.link_checked_at = result.link_checked_at
+                article.url = article.final_url or article.url
+                return
+            if result.link_status == "unknown" and unknown_result is None:
+                unknown_result = result
+            if result.link_error:
+                invalid_errors.append(result.link_error)
+        if unknown_result:
+            article.link_status = "unknown"
+            article.link_error = unknown_result.link_error
+            article.final_url = unknown_result.final_url or article.url
+            article.link_checked_at = unknown_result.link_checked_at
+        else:
+            article.link_status = "invalid"
+            article.link_error = ";".join(invalid_errors[:3]) or "invalid_link"
+            article.final_url = article.final_url or article.url
 
     def _fallback_candidates(self, source: SourceConfig, result: SourceRunResult) -> list[ArticleCandidate]:
         candidates: list[ArticleCandidate] = []

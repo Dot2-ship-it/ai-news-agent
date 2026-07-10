@@ -65,6 +65,15 @@ class EastmoneySourceTest(unittest.TestCase):
         self.assertTrue(decision.keep)
         self.assertTrue(decision.investment_signal_relevant)
 
+    def test_space_concept_stock_article_is_filtered(self) -> None:
+        article = self.make_article(
+            "长征十号乙首飞在即 可回收技术突破将至？机构紧盯多只概念股",
+            "文章讨论航天、火箭和可回收技术，提到机构紧盯多只概念股，但未涉及本项目关注的产业链关系。",
+        )
+        decision = score_article(article, self.source, self.tracked, self.start, self.end)
+        self.assertFalse(decision.keep)
+        self.assertTrue("AI 投资强相关" in decision.reason or "噪声内容" in decision.reason)
+
 
 if __name__ == "__main__":
     unittest.main()

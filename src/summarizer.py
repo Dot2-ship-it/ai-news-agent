@@ -9,6 +9,7 @@ from openai import OpenAI
 
 from .investment_filter import derive_report_fields
 from .models import Article, DailyDigest, WatchItem
+from .sources.eastmoney import has_ai_investment_theme
 
 
 BANNED_STYLE_WORDS = [
@@ -244,6 +245,10 @@ JSON schema：
                 "discovery_method": a.discovery_method,
                 "is_partial": a.is_partial,
                 "partial_reason": a.partial_reason,
+                "link_status": a.link_status,
+                "link_error": a.link_error,
+                "final_url": a.final_url,
+                "link_checked_at": a.link_checked_at.isoformat() if a.link_checked_at else None,
                 "content_status": self._content_status(a),
                 "content": a.content[:8000],
             }
@@ -395,6 +400,10 @@ JSON schema：
                             "is_partial": article.is_partial,
                             "content_status": item.content_status or self._content_status(article),
                             "discovery_method": item.discovery_method or article.discovery_method,
+                            "link_status": article.link_status,
+                            "link_error": article.link_error,
+                            "final_url": article.final_url,
+                            "link_checked_at": article.link_checked_at.isoformat() if article.link_checked_at else None,
                         }
                     )
                 )
@@ -419,6 +428,9 @@ JSON schema：
             if article.url in selected_urls:
                 continue
             if not self._is_observation_pool_candidate(article):
+                continue
+            relevance_point = self._ai_investment_relevance_point(article)
+            if not relevance_point:
                 continue
             has_unknown_time = article.time_status in {"time_unknown", "unknown"}
             should_watch = (
@@ -457,6 +469,12 @@ JSON schema：
                     status=" / ".join(status_parts) or "watch",
                     watch_variables=list(fields["watch_variables"]),
                     discovery_method=article.discovery_method,
+                    ai_investment_relevance=relevance_point,
+                    current_limit=self._watch_current_limit(article),
+                    link_status=article.link_status,
+                    link_error=article.link_error,
+                    final_url=article.final_url,
+                    link_checked_at=article.link_checked_at.isoformat() if article.link_checked_at else None,
                 )
             )
         watchlist.sort(key=lambda item: (-item.score, item.status, item.source))
@@ -479,6 +497,26 @@ JSON schema：
         if has_unknown_time and body_unavailable and article.content_source in {"list_page", "gdelt"}:
             return False
         return True
+
+    @staticmethod
+    def _ai_investment_relevance_point(article: Article) -> str | None:
+        if not has_ai_investment_theme(article.title, article.content):
+            return None
+        if article.matched_signals:
+            return f"{'、'.join(article.matched_signals[:3])} 与 AI 产业链投资变量相关。"
+        return "具备 AI 产业链相关性，但仍缺少足够投资增量。"
+
+    @staticmethod
+    def _watch_current_limit(article: Article) -> str:
+        limits = []
+        if article.is_partial or article.body_status != "body_available":
+            limits.append("细节不足")
+        if article.time_status in {"time_unknown", "unknown"}:
+            limits.append("时间待确认")
+        if article.link_status == "unknown":
+            limits.append("链接待确认")
+        limits.append("尚未交叉验证")
+        return " / ".join(dict.fromkeys(limits))
 
     def _quality_check_and_rewrite(
         self,

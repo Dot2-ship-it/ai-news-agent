@@ -62,6 +62,12 @@ class DigestEvent:
     importance: str
     is_watch: bool = False
     is_partial: bool = False
+    link_status: str = "valid"
+    link_error: str | None = None
+    final_url: str | None = None
+    link_checked_at: str | None = None
+    ai_investment_relevance: str | None = None
+    current_limit: str | None = None
 
 
 @dataclass
@@ -155,6 +161,10 @@ def event_from_item(item: NewsItem, themes: list[ThemeDefinition]) -> DigestEven
         relevance_score=item.investment_score,
         importance=item.importance,
         is_partial=item.is_partial,
+        link_status=item.link_status,
+        link_error=item.link_error,
+        final_url=item.final_url,
+        link_checked_at=item.link_checked_at,
     )
     return event
 
@@ -186,6 +196,12 @@ def event_from_watch_item(item: WatchItem, themes: list[ThemeDefinition]) -> Dig
         importance="低",
         is_watch=True,
         is_partial=True,
+        link_status=item.link_status,
+        link_error=item.link_error,
+        final_url=item.final_url,
+        link_checked_at=item.link_checked_at,
+        ai_investment_relevance=item.ai_investment_relevance,
+        current_limit=item.current_limit,
     )
 
 
@@ -300,6 +316,8 @@ def infer_variable_reason(name: str) -> str:
 
 
 def is_core_event(event: DigestEvent) -> bool:
+    if event.link_status != "valid":
+        return False
     if event.evidence_level in {"D", "E"} and event.confidence_level == "低":
         return False
     if event.confidence_level == "低" and event.relevance_score < 95:
@@ -310,6 +328,10 @@ def is_core_event(event: DigestEvent) -> bool:
 
 
 def is_readable_watch_event(event: DigestEvent) -> bool:
+    if event.link_status == "invalid":
+        return False
+    if not _ai_investment_relevance_point(event):
+        return False
     title = event.title.strip().lower()
     url = event.canonical_url.lower().rstrip("/")
     blocked = (
@@ -329,6 +351,18 @@ def is_readable_watch_event(event: DigestEvent) -> bool:
     if any(word in f"{title} {url}" for word in blocked):
         return False
     return event.signal_status != "noise"
+
+
+def _ai_investment_relevance_point(event: DigestEvent) -> str | None:
+    if event.ai_investment_relevance:
+        return event.ai_investment_relevance
+    text = f"{event.title}\n{event.signal_type}\n{event.industry_layer}\n{event.fact}"
+    if any(
+        keyword.lower() in text.lower()
+        for keyword in ("ai", "人工智能", "大模型", "算力", "gpu", "芯片", "半导体", "hbm", "dram", "数据中心", "机器人")
+    ):
+        return f"{event.signal_type} 与 AI 产业链投资变量相关。"
+    return None
 
 
 def build_theme_changes(events: list[DigestEvent], themes: list[ThemeDefinition]) -> list[ThemeChange]:

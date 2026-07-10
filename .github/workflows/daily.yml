@@ -2,8 +2,22 @@ name: Daily AI News Agent
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run mode"
+        required: true
+        default: "preview"
+        type: choice
+        options:
+          - preview
+          - test-email
+          - production
   schedule:
     - cron: "0 1 * * *"
+
+concurrency:
+  group: ai-news-agent-daily-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   daily:
@@ -13,8 +27,58 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -r requirements.txt
-      - run: python main.py
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore sent digest cache
+        if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'production') }}
+        uses: actions/cache@v4
+        with:
+          path: artifacts/sent_digests.json
+          key: sent-digests-${{ github.ref }}-${{ github.run_id }}
+          restore-keys: |
+            sent-digests-${{ github.ref }}-
+
+      - name: Preview only
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'preview' }}
+        run: |
+          python3 -m compileall main.py src scripts
+          python3 -m unittest
+          python3 main.py --preview-email
+
+      - name: Send test email
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'test-email' }}
+        run: python main.py --test-email
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-chat' }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          TEST_EMAIL_TO: ${{ secrets.TEST_EMAIL_TO }}
+          SEC_USER_AGENT: "${{ vars.SEC_USER_AGENT || 'AI News Agent contact: no-reply@example.com' }}"
+          LOOKBACK_HOURS: "24"
+
+      - name: Send scheduled digest
+        if: ${{ github.event_name == 'schedule' }}
+        run: python main.py
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-chat' }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          SEC_USER_AGENT: "${{ vars.SEC_USER_AGENT || 'AI News Agent contact: no-reply@example.com' }}"
+          LOOKBACK_HOURS: "24"
+
+      - name: Send manual production digest
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'production' }}
+        run: python main.py
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-chat' }}

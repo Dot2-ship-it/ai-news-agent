@@ -82,6 +82,12 @@ class ArticleCandidate(BaseModel):
     discovery_method: str = "list_page"
     is_partial: bool = False
     partial_reason: str | None = None
+    canonical_url: str | None = None
+    source_url: str | None = None
+    link_status: Literal["valid", "invalid", "unknown"] = "unknown"
+    link_error: str | None = None
+    final_url: str | None = None
+    link_checked_at: datetime | None = None
 
 
 class Article(BaseModel):
@@ -106,6 +112,10 @@ class Article(BaseModel):
     discovery_method: str = "list_page"
     is_partial: bool = False
     partial_reason: str | None = None
+    link_status: Literal["valid", "invalid", "unknown"] = "valid"
+    link_error: str | None = None
+    final_url: str | None = None
+    link_checked_at: datetime | None = None
     content: str
 
 
@@ -133,6 +143,10 @@ class NewsItem(BaseModel):
     signal_type: str | None = None
     watch_variables: list[str] = Field(default_factory=list)
     transmission_chain: str | None = None
+    link_status: Literal["valid", "invalid", "unknown"] = "valid"
+    link_error: str | None = None
+    final_url: str | None = None
+    link_checked_at: str | None = None
 
 
 class WatchItem(BaseModel):
@@ -149,6 +163,12 @@ class WatchItem(BaseModel):
     status: str
     watch_variables: list[str] = Field(default_factory=list)
     discovery_method: str | None = None
+    ai_investment_relevance: str | None = None
+    current_limit: str | None = None
+    link_status: Literal["valid", "invalid", "unknown"] = "valid"
+    link_error: str | None = None
+    final_url: str | None = None
+    link_checked_at: str | None = None
 
 
 class DailyDigest(BaseModel):
@@ -178,6 +198,7 @@ class SourceRunResult(BaseModel):
     filtered_by_time_count: int = 0
     filtered_by_relevance_count: int = 0
     filtered_by_url_count: int = 0
+    invalid_link_count: int = 0
     failed_count: int = 0
     status: Literal[
         "success",

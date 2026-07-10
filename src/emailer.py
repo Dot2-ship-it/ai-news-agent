@@ -137,13 +137,12 @@ def render_email_html(digest: DailyDigest, source_stats: list[dict[str, object]]
   <div class="wrap">
     <div class="card">
       <h1 class="title">{escape(subject)}</h1>
-      <div class="muted">生成时间：北京时间 {escape(generated_at)}｜有效事件数：{len(bundle.core_events)}</div>
+      <div class="muted">生成时间：北京时间 {escape(generated_at)}</div>
     </div>
     {_html_summary(bundle)}
     {_html_core_events(bundle)}
     {_html_theme_changes(bundle)}
     {_html_watchlist(bundle)}
-    {_html_diagnostics(source_stats)}
   </div>
 </body>
 </html>"""
@@ -208,13 +207,12 @@ def _html_core_events(bundle: EventBundle) -> str:
               <h3 class="event-title">{escape(_clean(event.title))}</h3>
               <div class="muted">{escape(event.industry_layer)}｜{escape(_theme_labels(event, bundle))}</div>
               <p><span class="label">来源：</span>{escape(event.source)}</p>
-              <p><span class="label">验证：</span>{escape(_verification_status(event))}</p>
               <p><span class="label">事实摘要：</span>{escape(_brief(event.fact, 120))}</p>
               <p><span class="label">增量判断：</span>{escape(_incremental_judgment(event))}</p>
               <p><span class="label">投研含义：</span>{escape(_brief(event.investment_implication, 140))}</p>
               <p><span class="label">影响公司：</span>{escape(_impact_companies(event))}</p>
               <div><span class="label">下一步验证：</span><ul>{variables}</ul></div>
-              <p><a href="{escape(event.canonical_url, quote=True)}">查看原文</a></p>
+              <p><a href="{escape(_event_link_url(event), quote=True)}">查看原文</a></p>
             </div>
             """
         )
@@ -308,13 +306,20 @@ def _html_watchlist(bundle: EventBundle) -> str:
         return _section_card("观察池", '<div class="watch">暂无进入观察池的弱信号。</div>')
     rows = []
     for event in bundle.watch_events[:8]:
-        companies = _join(event.direct_companies)
+        link_html = (
+            '<span class="muted">链接待确认</span>'
+            if event.link_status == "unknown"
+            else f'<a href="{escape(_event_link_url(event), quote=True)}">查看原文</a>'
+        )
         rows.append(
             f"""
             <div class="compact-item watch">
-              <strong>{escape(_clean(event.title))}</strong>
-              <div class="muted">{escape(event.source)}｜{escape(companies)}｜{escape(status_label(event.signal_status))}</div>
-              <a href="{escape(event.canonical_url, quote=True)}">查看原文</a>
+              <div><strong>标题：</strong>{escape(_clean(event.title))}</div>
+              <div><strong>来源：</strong>{escape(event.source)}</div>
+              <div><strong>AI 投资相关点：</strong>{escape(_watch_relevance(event))}</div>
+              <div><strong>当前限制：</strong>{escape(_watch_limit(event))}</div>
+              <div><strong>处理建议：</strong>暂不进入核心信号，等待公告或其他来源验证</div>
+              <div><strong>链接：</strong>{link_html}</div>
             </div>
             """
         )
@@ -392,7 +397,6 @@ def _render_core_event(event: DigestEvent, bundle: EventBundle) -> list[str]:
         f"产业链：{event.industry_layer}",
         f"主线：{_theme_labels(event, bundle)}",
         f"来源：{event.source}",
-        f"验证：{_verification_status(event)}",
         "",
         f"事实摘要：{_brief(event.fact, 120)}",
         f"增量判断：{_incremental_judgment(event)}",
@@ -402,7 +406,7 @@ def _render_core_event(event: DigestEvent, bundle: EventBundle) -> list[str]:
     ]
     for variable in event.follow_up_variables[:3]:
         lines.append(f"- {variable.name}：{variable.direction_to_watch}，{variable.why}")
-    lines.append(f"链接：{event.canonical_url}")
+    lines.append(f"链接：{_event_link_url(event)}")
     return lines
 
 
@@ -458,13 +462,12 @@ def _render_watch_events(events: list[DigestEvent]) -> list[str]:
         lines.extend(
             [
                 "",
-                f"事件：{_clean(event.title)}",
-                f"层次：{event.industry_layer}",
-                f"信号：{status_label(event.signal_status)}",
+                f"标题：{_clean(event.title)}",
                 f"来源：{event.source}",
-                f"验证：{_verification_status(event)}",
-                f"后续观察点：{_format_variables(event)}",
-                f"链接：{event.canonical_url}",
+                f"AI 投资相关点：{_watch_relevance(event)}",
+                f"当前限制：{_watch_limit(event)}",
+                "处理建议：暂不进入核心信号，等待公告或其他来源验证",
+                f"链接：{'链接待确认' if event.link_status == 'unknown' else _event_link_url(event)}",
             ]
         )
     return lines
@@ -576,6 +579,28 @@ def _verification_status(event: DigestEvent) -> str:
     if event.is_watch or event.is_partial or event.published_at is None:
         return "待确认"
     return "单一来源"
+
+
+def _event_link_url(event: DigestEvent) -> str:
+    return event.final_url or event.canonical_url
+
+
+def _watch_relevance(event: DigestEvent) -> str:
+    if event.ai_investment_relevance:
+        return event.ai_investment_relevance
+    return f"{event.signal_type} 与 {event.industry_layer} 相关，需要人工确认投资增量。"
+
+
+def _watch_limit(event: DigestEvent) -> str:
+    if event.current_limit:
+        return event.current_limit
+    limits = []
+    if event.is_partial:
+        limits.append("细节不足")
+    if event.link_status == "unknown":
+        limits.append("链接待确认")
+    limits.append("尚未交叉验证")
+    return " / ".join(dict.fromkeys(limits))
 
 
 def _impact_companies(event: DigestEvent) -> str:
@@ -904,16 +929,19 @@ def _clean(text: str) -> str:
     return cleaned.replace("...", "").replace("…", "").strip()
 
 
-def send_email(subject: str, body: str, html_body: str | None = None) -> None:
-    required = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "EMAIL_FROM", "EMAIL_TO"]
+def send_email(subject: str, body: str, html_body: str | None = None, to_email: str | None = None) -> None:
+    required = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "EMAIL_FROM"]
     missing = [key for key in required if not os.getenv(key)]
+    recipient = to_email or os.getenv("EMAIL_TO")
+    if not recipient:
+        missing.append("EMAIL_TO")
     if missing:
         raise RuntimeError(f"Missing email environment variables: {', '.join(missing)}")
 
     message = EmailMessage()
     message["Subject"] = subject
     message["From"] = os.environ["EMAIL_FROM"]
-    message["To"] = os.environ["EMAIL_TO"]
+    message["To"] = recipient
     message.set_content(body, subtype="plain", charset="utf-8")
     if html_body:
         message.add_alternative(html_body, subtype="html", charset="utf-8")

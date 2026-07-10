@@ -10,9 +10,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from main import render_diagnostics_text
+from main import ARTIFACTS_DIR, render_preview_email
 from src.emailer import render_email_html, render_email_text
-from src.models import DailyDigest
+from src.models import DailyDigest, NewsItem, WatchItem
 
 
 class EmailSnapshotTest(unittest.TestCase):
@@ -26,8 +26,7 @@ class EmailSnapshotTest(unittest.TestCase):
         self.source_stats = data["source_stats"]
 
     def render_email(self) -> str:
-        body = render_email_text(self.digest, source_stats=self.source_stats)
-        return f"{body}\n{render_diagnostics_text(self.source_stats)}"
+        return render_email_text(self.digest, source_stats=self.source_stats)
 
     def render_html(self) -> str:
         return render_email_html(self.digest, source_stats=self.source_stats)
@@ -41,14 +40,14 @@ class EmailSnapshotTest(unittest.TestCase):
         self.assertIn("核心信号 Top 3", email)
         self.assertIn("主线变化", email)
         self.assertIn("观察池", email)
-        self.assertIn("抓取诊断", email)
-        for required_field in ("来源：", "验证：", "变化说明：", "投研含义：", "下一步验证："):
+        for required_field in ("来源：", "变化说明：", "投研含义：", "下一步验证："):
             self.assertIn(required_field, email)
         core_section = self._section(email, "核心信号 Top 3", "主线变化")
         self.assertEqual(core_section.count("事实摘要："), 3)
         self.assertEqual(core_section.count("增量判断："), 3)
         self.assertEqual(core_section.count("投研含义："), 3)
         self.assertEqual(core_section.count("下一步验证："), 3)
+        self.assertFalse(any(line.startswith("验证：") for line in core_section.splitlines()))
         self.assertNotIn("发生了什么：", email)
         self.assertNotIn("为什么重要：", email)
         for removed_field in (
@@ -61,6 +60,15 @@ class EmailSnapshotTest(unittest.TestCase):
             "今日事件：",
             "新增事件：",
             "历史数据不足，暂按本轮首次记录处理",
+            "有效事件数",
+            "抓取诊断",
+            "成功源",
+            "部分成功源",
+            "失败源",
+            "主要失败原因",
+            "fetch_failed",
+            "gdelt_rate_limited",
+            "partial_success",
         ):
             self.assertNotIn(removed_field, email)
         self.assertNotIn("反转", email)
@@ -84,7 +92,6 @@ class EmailSnapshotTest(unittest.TestCase):
         self.assertIn("观察池", html)
         self.assertIn("查看原文", html)
         self.assertIn("来源：", html)
-        self.assertIn("验证：", html)
         self.assertIn("变化说明：", html)
         for removed_heading in ("产业链层次", "公司层次", "本周继续追踪", "今日结论"):
             self.assertNotIn(removed_heading, html)
@@ -105,6 +112,14 @@ class EmailSnapshotTest(unittest.TestCase):
             "今日事件：",
             "新增事件：",
             "历史数据不足，暂按本轮首次记录处理",
+            "有效事件数",
+            "抓取诊断",
+            "成功源",
+            "部分成功源",
+            "失败源",
+            "fetch_failed",
+            "gdelt_rate_limited",
+            "partial_success",
         ):
             self.assertNotIn(raw_field, html)
         html_without_href_urls = re.sub(r'href="https?://[^"]+"', 'href=""', html)
@@ -162,6 +177,97 @@ class EmailSnapshotTest(unittest.TestCase):
             self.assertNotIn(text, bare_variables)
             self.assertIn("观察", text)
             self.assertRegex(text, r"说明|验证|意味着|若")
+
+    def test_watchlist_link_and_relevance_rules(self) -> None:
+        digest = DailyDigest(
+            subject="AI 投研情报日报｜2026-07-09",
+            opening_summary="",
+            trend="",
+            items=[
+                NewsItem(
+                    importance="高",
+                    title="Broken QbitAI AI 芯片订单消息",
+                    source="量子位 QbitAI",
+                    url="https://www.qbitai.com/2026/07/446778.html",
+                    core_fact="AI 芯片订单消息链接不可用。",
+                    important_meaning="影响 AI 芯片供应链订单判断。",
+                    link_status="invalid",
+                )
+            ],
+            watchlist=[
+                WatchItem(
+                    title="Broken QbitAI AI 芯片订单消息",
+                    url="https://www.qbitai.com/2026/07/446778.html",
+                    source="量子位 QbitAI",
+                    industry_layer="半导体与硬件供应链",
+                    signal_type="订单",
+                    score=70,
+                    status="watch",
+                    watch_variables=["AI 芯片订单"],
+                    ai_investment_relevance="AI 芯片订单与半导体供应链投资变量相关。",
+                    current_limit="链接不可用",
+                    link_status="invalid",
+                ),
+                WatchItem(
+                    title="AI 服务器订单待确认",
+                    url="https://example.com/unknown-ai-server",
+                    source="东方财富",
+                    industry_layer="半导体与硬件供应链",
+                    signal_type="订单",
+                    score=65,
+                    status="watch",
+                    watch_variables=["AI 服务器订单"],
+                    ai_investment_relevance="AI 服务器订单与算力供应链收入变量相关。",
+                    current_limit="来源单一 / 细节不足",
+                    link_status="unknown",
+                ),
+                WatchItem(
+                    title="长征十号乙首飞在即 可回收技术突破将至？机构紧盯多只概念股",
+                    url="https://finance.eastmoney.com/a/space.html",
+                    source="东方财富",
+                    industry_layer="二级市场与资金面",
+                    signal_type="市场异动",
+                    score=65,
+                    status="watch",
+                    watch_variables=["概念股"],
+                    link_status="valid",
+                ),
+            ],
+        )
+        email = render_email_text(digest, source_stats=[])
+        self.assertNotIn("Broken QbitAI", email)
+        self.assertNotIn("446778.html", email)
+        self.assertIn("AI 投资相关点：AI 服务器订单与算力供应链收入变量相关。", email)
+        self.assertIn("链接：链接待确认", email)
+        self.assertNotIn("长征十号乙", email)
+        self.assertNotIn("航天", email)
+        self.assertNotIn("火箭", email)
+        self.assertNotIn("可回收技术", email)
+
+    def test_preview_artifacts_keep_diagnostics_out_of_email(self) -> None:
+        body = render_preview_email()
+        html = (ARTIFACTS_DIR / "preview_email.html").read_text(encoding="utf-8")
+        txt = (ARTIFACTS_DIR / "preview_email.txt").read_text(encoding="utf-8")
+        diagnostics_path = ARTIFACTS_DIR / "crawl_diagnostics.json"
+        self.assertTrue(diagnostics_path.exists())
+        diagnostics = diagnostics_path.read_text(encoding="utf-8")
+        self.assertIn("source_name", diagnostics)
+        for rendered in (body, html, txt):
+            self.assertIn("今日摘要", rendered)
+            self.assertIn("核心信号", rendered)
+            self.assertIn("主线变化", rendered)
+            self.assertIn("观察池", rendered)
+            for internal in (
+                "有效事件数",
+                "抓取诊断",
+                "成功源",
+                "部分成功源",
+                "失败源",
+                "fetch_failed",
+                "gdelt_rate_limited",
+                "partial_success",
+            ):
+                self.assertNotIn(internal, rendered)
 
     @staticmethod
     def _section(email: str, start: str, end: str) -> str:
